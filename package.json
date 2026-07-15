@@ -1,0 +1,9 @@
+{
+  "name": "twinkle-ai",
+  "version": "3.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/proactive.test.js tests/chat-function.test.js",
+    "check": "node --test tests/proactive.test.js tests/chat-function.test.js"
+  }
+}

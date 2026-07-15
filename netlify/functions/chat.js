@@ -2,20 +2,25 @@
    TWINKLE v3.0 — NETLIFY SERVERLESS PROXY
    netlify/functions/chat.js
 
-   Sits between the browser and Gemini.
+   Sits between the browser and configured AI providers.
    - Verifies Firebase ID token
-   - Calls Gemini with the secret GEMINI_API_KEY (never exposed)
+   - Uses DeepSeek as primary and Gemini as an optional fallback
+   - Keeps provider credentials on the server
    - Returns response JSON
 
    Env vars required (set in Netlify dashboard):
-     GEMINI_API_KEY   → your Google Gemini API key
+     DEEPSEEK_API_KEY → your DeepSeek API key
+     GEMINI_API_KEY   → optional Google Gemini fallback key
      FIREBASE_API_KEY → your Firebase web API key (from firebaseConfig)
    ═══════════════════════════════════════════════════════════ */
 
 const GEMINI_API_KEY   = process.env.GEMINI_API_KEY;
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
 const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY;
 
 const BASE_GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
+const DEEPSEEK_MODEL = 'deepseek-v4-pro';
 
 // Models to try in priority order
 const MODEL_PRIORITY = [
@@ -61,6 +66,37 @@ async function callGemini(model, body) {
   );
 }
 
+async function callDeepSeek(messages, systemPrompt) {
+  const convertedMessages = [
+    {
+      role: 'system',
+      content: systemPrompt || 'You are Twinkle, a helpful AI assistant.',
+    },
+    ...messages
+      .filter(message => Array.isArray(message.parts) && message.parts.some(part => part?.text))
+      .slice(-40)
+      .map(message => ({
+        role: message.role === 'model' ? 'assistant' : 'user',
+        content: message.parts.map(part => part?.text || '').join('\n').trim(),
+      })),
+  ];
+
+  return fetch(DEEPSEEK_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: DEEPSEEK_MODEL,
+      messages: convertedMessages,
+      stream: false,
+      temperature: 0.85,
+      max_tokens: 1500,
+    }),
+  });
+}
+
 /* ── MAIN HANDLER ─────────────────────────────────────── */
 exports.handler = async (event) => {
   // CORS preflight
@@ -73,8 +109,8 @@ exports.handler = async (event) => {
   }
 
   // Check server config
-  if (!GEMINI_API_KEY || !FIREBASE_API_KEY) {
-    console.error('[Twinkle] Missing env vars: GEMINI_API_KEY or FIREBASE_API_KEY');
+  if (!FIREBASE_API_KEY || (!DEEPSEEK_API_KEY && !GEMINI_API_KEY)) {
+    console.error('[Twinkle] Missing Firebase configuration or AI provider key');
     return {
       statusCode: 500,
       headers: CORS,
@@ -116,6 +152,43 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Missing messages array.' }) };
   }
 
+  if (messages.length > 40 || JSON.stringify(messages).length > 120000) {
+    return { statusCode: 413, headers: CORS, body: JSON.stringify({ error: 'Conversation is too large. Start a new chat.' }) };
+  }
+
+  const providerErrors = [];
+
+  if (DEEPSEEK_API_KEY) {
+    try {
+      const res = await callDeepSeek(messages, systemPrompt);
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        const text = data.choices?.[0]?.message?.content || '';
+        if (text) {
+          return {
+            statusCode: 200,
+            headers: CORS,
+            body: JSON.stringify({
+              text,
+              provider: 'deepseek',
+              model: data.model || DEEPSEEK_MODEL,
+              finishReason: data.choices?.[0]?.finish_reason || 'stop',
+              userId: user.localId,
+              usage: data.usage || null,
+            }),
+          };
+        }
+      }
+
+      providerErrors.push(`DeepSeek HTTP ${res.status}`);
+      console.warn('[Twinkle] DeepSeek request failed:', res.status, data?.error?.message || 'Unknown error');
+    } catch (error) {
+      providerErrors.push('DeepSeek network error');
+      console.warn('[Twinkle] DeepSeek network error:', error.message);
+    }
+  }
+
   // ── BUILD GEMINI BODY ────────────────────────────────────
   const geminiBody = {
     system_instruction: {
@@ -137,7 +210,7 @@ exports.handler = async (event) => {
   };
 
   // ── TRY MODELS IN PRIORITY ORDER ─────────────────────────
-  for (const model of MODEL_PRIORITY) {
+  for (const model of GEMINI_API_KEY ? MODEL_PRIORITY : []) {
     let res;
     try {
       res = await callGemini(model, geminiBody);
@@ -162,8 +235,9 @@ exports.handler = async (event) => {
       if (res.status === 429 || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('rate')) {
         continue;
       }
-      // Auth error → surface to client
-      return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: msg }) };
+      providerErrors.push(`Gemini ${model}: ${msg}`);
+      console.warn(`[Twinkle] Gemini request failed on ${model}:`, msg);
+      break;
     }
 
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -174,6 +248,7 @@ exports.handler = async (event) => {
       headers: CORS,
       body: JSON.stringify({
         text,
+        provider: 'google',
         model,
         finishReason,
         userId: user.localId,
@@ -182,10 +257,10 @@ exports.handler = async (event) => {
     };
   }
 
-  // All models exhausted
+  console.error('[Twinkle] All providers failed:', providerErrors.join(' | '));
   return {
-    statusCode: 429,
+    statusCode: 502,
     headers: CORS,
-    body: JSON.stringify({ error: 'All AI models are busy right now. Wait 30 seconds and try again.' }),
+    body: JSON.stringify({ error: 'AI service is temporarily unavailable. Check the configured provider keys and try again.' }),
   };
 };

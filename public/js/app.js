@@ -64,6 +64,7 @@
     _activeProjectId = null;
     _isSending       = false;
     API.clearHistory();
+    if (typeof Proactive !== 'undefined') Proactive.stop();
     if (chatMessages) chatMessages.innerHTML = '';
   }
 
@@ -264,12 +265,79 @@
     initProjectModal();
 
     loadOrCreateConversation();
+    initProactiveCheckIns();
 
     const newsList    = document.getElementById('news-list');
     const newsRefresh = document.getElementById('news-refresh-btn');
     News.render(newsList, newsRefresh);
     newsRefresh.addEventListener('click', () => News.render(newsList, newsRefresh, true));
     setInterval(() => News.render(newsList, newsRefresh), 30 * 60 * 1000);
+  }
+
+  /* ── PROACTIVE CHECK-INS ───────────────────────────────── */
+  function getProactiveContext() {
+    const profile = Auth.getUserProfile();
+    const prefs = Auth.getPrefs();
+    return {
+      name: prefs.name || profile?.firstName || 'there',
+      goal: prefs.goal || '',
+      conversationCount: Conversations.getAll().length,
+    };
+  }
+
+  function deliverProactiveCheckIn(checkIn) {
+    if (!checkIn || _isSending) return false;
+    const profile = Auth.getUserProfile();
+    if (!profile) return false;
+
+    let conv = Conversations.get(_currentConvId);
+    if (!conv || conv.messages.length > 0) {
+      conv = Conversations.create(null);
+      _currentConvId = conv.id;
+      _activeProjectId = null;
+      chatMessages.innerHTML = '';
+      API.clearHistory();
+      updateProjectLabel();
+    } else {
+      document.getElementById('empty-chat-state')?.remove();
+    }
+
+    Conversations.rename(conv.id, checkIn.title);
+    UI.renderTwinkleMessage(checkIn.text, {
+      id: 'general', label: 'Check-in', icon: '✨', color: 'general'
+    }, false);
+    Conversations.addMessage(conv.id, {
+      role: 'twinkle',
+      text: checkIn.text,
+      domain: 'general',
+      time: checkIn.createdAt,
+      proactive: true,
+      proactiveKind: checkIn.kind,
+    });
+
+    const updated = Conversations.get(conv.id);
+    API.loadHistory(updated?.messages || []);
+    Proactive.recordDelivery(profile.uid, checkIn);
+    Proactive.notify(checkIn);
+    renderSidebar();
+    return true;
+  }
+
+  function initProactiveCheckIns() {
+    if (typeof Proactive === 'undefined') return;
+    const profile = Auth.getUserProfile();
+    if (!profile) return;
+
+    const sessionCheckIn = Proactive.getSessionCheckIn(profile.uid, getProactiveContext());
+    if (sessionCheckIn) {
+      setTimeout(() => deliverProactiveCheckIn(sessionCheckIn), 700);
+    }
+
+    Proactive.startIdleMonitor({
+      uid: profile.uid,
+      getContext: getProactiveContext,
+      onCheckIn: deliverProactiveCheckIn,
+    });
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -649,6 +717,18 @@
     if (emailEl) emailEl.textContent = profile?.email || '';
     if (avaEl && profile?.photo) { avaEl.src = profile.photo; avaEl.alt = profile.name; }
 
+    const proactiveToggle = document.getElementById('proactive-enabled');
+    const proactiveStatus = document.getElementById('proactive-status');
+    if (proactiveToggle && profile && typeof Proactive !== 'undefined') {
+      proactiveToggle.checked = Proactive.getSettings(profile.uid).enabled;
+    }
+    if (proactiveStatus) {
+      const notificationState = typeof Notification === 'undefined'
+        ? 'unsupported'
+        : Notification.permission;
+      proactiveStatus.textContent = `Quiet hours: 10 PM–8 AM · Maximum 2 check-ins/day · Notifications: ${notificationState}`;
+    }
+
     settingsOverlay.classList.remove('hidden');
   }
 
@@ -659,6 +739,21 @@
 
     settingsOverlay.addEventListener('click', (e) => {
       if (e.target === settingsOverlay) settingsOverlay.classList.add('hidden');
+    });
+
+    document.getElementById('proactive-enabled')?.addEventListener('change', (e) => {
+      const profile = Auth.getUserProfile();
+      if (!profile || typeof Proactive === 'undefined') return;
+      Proactive.setEnabled(profile.uid, e.target.checked);
+      UI.toast(e.target.checked ? 'Proactive check-ins enabled' : 'Proactive check-ins paused', 'success');
+    });
+
+    document.getElementById('proactive-notifications')?.addEventListener('click', async () => {
+      if (typeof Proactive === 'undefined') return;
+      const result = await Proactive.requestNotificationPermission();
+      const status = document.getElementById('proactive-status');
+      if (status) status.textContent = `Quiet hours: 10 PM–8 AM · Maximum 2 check-ins/day · Notifications: ${result}`;
+      UI.toast(result === 'granted' ? 'Browser notifications enabled' : 'Notifications were not enabled', result === 'granted' ? 'success' : 'error');
     });
 
     // Test connection

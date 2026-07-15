@@ -45,7 +45,9 @@ in Google Cloud/Firebase settings.
 
 Connect this folder to a Netlify site and configure these environment variables:
 
-- `GEMINI_API_KEY`
+- `DEEPSEEK_API_KEY`
 - `FIREBASE_API_KEY`
+
+`GEMINI_API_KEY` is optional and enables the Google Gemini fallback.
 
 Do not commit real secret values.

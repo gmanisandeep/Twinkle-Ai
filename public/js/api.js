@@ -154,12 +154,24 @@ ${domains.length > 0 ? `- Main focus areas: ${domains.join(', ')}` : ''}
   function clearHistory() { _conversationHistory = []; }
 
   function loadHistory(messages) {
-    _conversationHistory = messages
-      .filter(m => m.text && m.text.trim())
-      .map(m => ({
-        role:  m.role === 'twinkle' ? 'model' : 'user',
+    const validMessages = messages.filter(m => m.text && m.text.trim());
+    _conversationHistory = [];
+
+    // Gemini history should begin with a user turn. A proactive conversation
+    // begins with Twinkle, so add a synthetic context turn for continuity.
+    if (validMessages[0]?.role === 'twinkle' && validMessages[0]?.proactive) {
+      _conversationHistory.push({
+        role: 'user',
+        parts: [{ text: 'You initiated a proactive check-in. Continue naturally from that check-in when I reply.' }],
+      });
+    }
+
+    validMessages.forEach(m => {
+      _conversationHistory.push({
+        role: m.role === 'twinkle' ? 'model' : 'user',
         parts: [{ text: m.text }],
-      }));
+      });
+    });
   }
 
   /* ── SEND MESSAGE VIA NETLIFY PROXY ─────────────────────── */
