@@ -50,4 +50,16 @@ Connect this folder to a Netlify site and configure these environment variables:
 
 `GEMINI_API_KEY` is optional and enables the Google Gemini fallback.
 
+Optional production controls:
+
+- `DEEPSEEK_MODEL` (default `deepseek-v4-pro`)
+- `GEMINI_MODELS` (comma-separated fallback order)
+- `ALLOWED_ORIGINS` (comma-separated browser origins)
+- `RATE_LIMIT_PER_MINUTE` (default `20` per authenticated user)
+- `PROVIDER_TIMEOUT_MS` (default `45000`)
+
+The gateway accepts same-origin browser calls automatically. Provider keys are
+read only inside Netlify Functions and must never be added to files under
+`public/`.
+
 Do not commit real secret values.
