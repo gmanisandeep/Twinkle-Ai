@@ -10,72 +10,7 @@ const UI = (() => {
 
   /* ── MARKDOWN PARSER ────────────────────────────────────── */
   function parseMarkdown(text) {
-    if (!text) return '';
-    let html = text;
-
-    // Fenced code blocks
-    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-      const escaped = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      return `<pre><code class="language-${lang}">${escaped.trim()}</code></pre>`;
-    });
-
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-    // Headers
-    html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-    // Bold, italic, strikethrough
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
-
-    // Horizontal rule
-    html = html.replace(/^[-─]{3,}$/gm, '<hr>');
-
-    // Blockquote
-    html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
-
-    // Unordered lists
-    html = html.replace(/^(\s*[-•*] .+(\n\s*[-•*] .+)*)/gm, (match) => {
-      const items = match.split('\n').filter(l => l.trim())
-        .map(l => `<li>${l.replace(/^\s*[-•*] /, '')}</li>`).join('');
-      return `<ul>${items}</ul>`;
-    });
-
-    // Ordered lists
-    html = html.replace(/^(\s*\d+\. .+(\n\s*\d+\. .+)*)/gm, (match) => {
-      const items = match.split('\n').filter(l => l.trim())
-        .map(l => `<li>${l.replace(/^\s*\d+\. /, '')}</li>`).join('');
-      return `<ol>${items}</ol>`;
-    });
-
-    // Tables
-    html = html.replace(/(\|.+\|\n\|[-| :]+\|\n(?:\|.+\|\n?)+)/g, (match) => {
-      const lines = match.trim().split('\n');
-      const headers = lines[0].split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
-      const rows = lines.slice(2).map(line => {
-        const cells = line.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('');
-        return `<tr>${cells}</tr>`;
-      }).join('');
-      return `<table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
-    });
-
-    // Links
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-
-    // Paragraphs
-    html = html.replace(/\n{2,}/g, '\n\n');
-    html = html.split('\n\n').map(block => {
-      const trimmed = block.trim();
-      if (!trimmed) return '';
-      if (trimmed.startsWith('<')) return trimmed;
-      return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`;
-    }).join('\n');
-
-    return html;
+    return typeof SafeMarkdown !== 'undefined' ? SafeMarkdown.render(text) : escapeHTML(text);
   }
 
   /* ── TASK SUMMARY PARSER ────────────────────────────────── */
@@ -177,6 +112,7 @@ const UI = (() => {
       <button class="reaction-btn" title="Not helpful" data-reaction="down">👎</button>
       <button class="reaction-btn" title="Star" data-reaction="star">⭐</button>
       <button class="reaction-btn" id="copy-btn-${Date.now()}" title="Copy response">📋 <span class="rbtn-label">Copy</span></button>
+      <button class="reaction-btn" title="Regenerate response">↻ <span class="rbtn-label">Regenerate</span></button>
       ${rTime ? `<span class="reading-time">${rTime}</span>` : ''}
     `;
 
@@ -198,6 +134,9 @@ const UI = (() => {
         });
       });
     }
+    bar.querySelector('[title="Regenerate response"]')?.addEventListener('click', () => {
+      document.dispatchEvent(new CustomEvent('twinkle:regenerate', { detail: { responseText: text } }));
+    });
     return bar;
   }
 
@@ -250,11 +189,12 @@ const UI = (() => {
         <div class="message-avatar">T</div>
         <div class="message-body">
           <div class="message-meta"><span class="message-name">Twinkle</span></div>
-          <div class="message-content-text">
+          <div class="message-content-text" role="status" aria-live="polite" aria-atomic="true">
             <div class="typing-indicator">
               <div class="typing-dot"></div>
               <div class="typing-dot"></div>
               <div class="typing-dot"></div>
+              <span class="thinking-label">Connecting to Twinkle…</span>
             </div>
           </div>
         </div>
@@ -263,6 +203,16 @@ const UI = (() => {
     chatMessages.appendChild(el);
     scrollToBottom();
     return el;
+  }
+
+  function setThinkingPhase(phase) {
+    const labels = {
+      thinking: 'Thinking through your request…',
+      responding: 'Writing the response…',
+      fallback: 'Switching to the backup model…',
+    };
+    const label = document.querySelector('#typing-indicator .thinking-label');
+    if (label) label.textContent = labels[phase] || 'Working on your request…';
   }
 
   /* ── RENDER TWINKLE MESSAGE ─────────────────────────────── */
@@ -312,6 +262,7 @@ const UI = (() => {
     }
 
     chatMessages.appendChild(el);
+    if (!streaming) el.querySelector('.message-body')?.appendChild(buildReactionBar(text));
     scrollToBottom();
     return el;
   }
@@ -332,7 +283,7 @@ const UI = (() => {
   }
 
   /* ── FINALIZE STREAMING BUBBLE ──────────────────────────── */
-  function finalizeStreamingBubble(el, text) {
+  function finalizeStreamingBubble(el, text, options = {}) {
     const summaryRows = parseTaskSummary(text);
     let displayText = text;
     if (summaryRows) {
@@ -342,6 +293,14 @@ const UI = (() => {
 
     const contentEl = el.querySelector('.message-content-text');
     if (contentEl) contentEl.innerHTML = parseMarkdown(displayText);
+
+    if (options.cancelled) {
+      const status = document.createElement('span');
+      status.className = 'generation-status';
+      status.textContent = 'Stopped';
+      status.setAttribute('role', 'status');
+      el.querySelector('.message-meta')?.appendChild(status);
+    }
 
     if (summaryRows) {
       const body = el.querySelector('.message-body');
@@ -466,6 +425,6 @@ const UI = (() => {
     updateStreamingBubble, finalizeStreamingBubble,
     renderEmptyState, refreshStats, renderToolsGrid,
     startClock, setDomainIndicator, toast, scrollToBottom,
-    sendChip, confetti, setInputGlow, initScrollButton
+    sendChip, confetti, setInputGlow, setThinkingPhase, initScrollButton
   };
 })();

@@ -10,6 +10,7 @@
   let _currentConvId   = null;
   let _activeProjectId = null;
   let _isSending       = false;
+  let _activeController = null;
 
   /* ── ELEMENTS ───────────────────────────────────────────── */
   const authLoading      = document.getElementById('auth-loading');
@@ -63,6 +64,8 @@
     _currentConvId   = null;
     _activeProjectId = null;
     _isSending       = false;
+    _activeController?.abort();
+    _activeController = null;
     API.clearHistory();
     if (typeof Proactive !== 'undefined') Proactive.stop();
     if (chatMessages) chatMessages.innerHTML = '';
@@ -266,6 +269,7 @@
 
     loadOrCreateConversation();
     initProactiveCheckIns();
+    if (typeof Workspace !== 'undefined') Workspace.init();
 
     const newsList    = document.getElementById('news-list');
     const newsRefresh = document.getElementById('news-refresh-btn');
@@ -448,6 +452,7 @@
     renderProjectsList();
     renderChatHistory();
     UI.refreshStats();
+    if (typeof Workspace !== 'undefined') Workspace.refresh();
   }
 
   function renderProjectsList() {
@@ -559,7 +564,7 @@
       chatInput.style.height = 'auto';
       chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
       charCount.textContent  = `${chatInput.value.length} / 4000`;
-      sendBtn.disabled       = !chatInput.value.trim() || _isSending;
+      sendBtn.disabled       = _isSending ? false : !chatInput.value.trim();
     });
 
     chatInput.addEventListener('keydown', (e) => {
@@ -569,15 +574,63 @@
       }
     });
 
-    sendBtn.addEventListener('click', handleSend);
+    sendBtn.addEventListener('click', () => {
+      if (_isSending) {
+        _activeController?.abort();
+      } else {
+        handleSend();
+      }
+    });
+
+    document.addEventListener('twinkle:regenerate', (event) => {
+      if (_isSending) {
+        UI.toast('Stop the current response before regenerating.', 'info');
+        return;
+      }
+      regenerateResponse(event.detail?.responseText || '');
+    });
+  }
+
+  function setComposerSending(sending) {
+    _isSending = sending;
+    sendBtn.classList.toggle('is-stopping', sending);
+    sendBtn.disabled = sending ? false : !chatInput.value.trim();
+    sendBtn.setAttribute('aria-label', sending ? 'Stop generating' : 'Send message');
+    sendBtn.title = sending ? 'Stop generating' : 'Send message';
+    sendBtn.innerHTML = sending
+      ? '<span class="stop-icon" aria-hidden="true"></span>'
+      : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 2L15 22 11 13 2 9l20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+
+  function regenerateResponse(responseText) {
+    const conv = Conversations.get(_currentConvId);
+    if (!conv || !responseText) return;
+    let assistantIndex = -1;
+    for (let i = conv.messages.length - 1; i >= 0; i -= 1) {
+      if (conv.messages[i].role === 'twinkle' && conv.messages[i].text === responseText) {
+        assistantIndex = i;
+        break;
+      }
+    }
+    if (assistantIndex < 1 || conv.messages[assistantIndex - 1]?.role !== 'user') {
+      UI.toast('The original prompt for this response is unavailable.', 'error');
+      return;
+    }
+    const prompt = conv.messages[assistantIndex - 1].text;
+    conv.messages = conv.messages.slice(0, assistantIndex - 1);
+    Conversations.save(conv);
+    openConversation(conv);
+    chatInput.value = prompt;
+    chatInput.dispatchEvent(new Event('input'));
+    handleSend();
   }
 
   async function handleSend() {
     const text = chatInput.value.trim();
     if (!text || _isSending) return;
 
-    _isSending      = true;
-    sendBtn.disabled = true;
+    setComposerSending(true);
+    _activeController = new AbortController();
     chatInput.value  = '';
     chatInput.style.height = 'auto';
     charCount.textContent  = '0 / 4000';
@@ -600,6 +653,8 @@
 
     try {
       await API.streamMessage(text, domain.id, {
+        signal: _activeController.signal,
+        onPhase: (phase) => UI.setThinkingPhase(phase),
         onChunk: (chunk) => {
           if (!messageEl) {
             document.getElementById('typing-indicator')?.remove();
@@ -608,18 +663,24 @@
             UI.updateStreamingBubble(messageEl, chunk);
           }
         },
-        onDone: (responseText) => {
+        onDone: (responseText, meta = {}) => {
           UI.setInputGlow(false);
           if (messageEl) {
-            UI.finalizeStreamingBubble(messageEl, responseText);
-          } else {
+            UI.finalizeStreamingBubble(messageEl, responseText, { cancelled: meta.cancelled });
+          } else if (responseText) {
             document.getElementById('typing-indicator')?.remove();
             messageEl = UI.renderTwinkleMessage(responseText, domain, false);
+          } else {
+            document.getElementById('typing-indicator')?.remove();
+            if (meta.cancelled) UI.toast('Generation stopped.', 'info');
           }
 
-          Conversations.addMessage(_currentConvId, {
-            role: 'twinkle', text: responseText, domain: domain.id, time: Date.now()
-          });
+          if (responseText) {
+            Conversations.addMessage(_currentConvId, {
+              role: 'twinkle', text: responseText, domain: domain.id, time: Date.now(),
+              provider: meta.provider || null, model: meta.model || null, cancelled: Boolean(meta.cancelled)
+            });
+          }
 
           if (responseText.includes('✅ TASK SUMMARY')) {
             Conversations.stats.increment('tasks');
@@ -627,8 +688,8 @@
 
           UI.refreshStats();
           renderSidebar();
-          _isSending       = false;
-          sendBtn.disabled = !chatInput.value.trim();
+          _activeController = null;
+          setComposerSending(false);
         },
         onError: (errMsg) => {
           UI.setInputGlow(false);
@@ -648,14 +709,15 @@
             </div>`;
           chatMessages.appendChild(errEl);
           UI.scrollToBottom();
-          _isSending       = false;
-          sendBtn.disabled = !chatInput.value.trim();
+          _activeController = null;
+          setComposerSending(false);
         },
       });
     } catch (e) {
       UI.setInputGlow(false);
       UI.toast('Unexpected error: ' + e.message, 'error');
-      _isSending = false;
+      _activeController = null;
+      setComposerSending(false);
     }
   }
 
@@ -719,6 +781,10 @@
 
     const proactiveToggle = document.getElementById('proactive-enabled');
     const proactiveStatus = document.getElementById('proactive-status');
+    const themeSelect = document.getElementById('theme-select');
+    if (themeSelect && typeof Theme !== 'undefined') {
+      themeSelect.value = Theme.getPreference();
+    }
     if (proactiveToggle && profile && typeof Proactive !== 'undefined') {
       proactiveToggle.checked = Proactive.getSettings(profile.uid).enabled;
     }
@@ -739,6 +805,12 @@
 
     settingsOverlay.addEventListener('click', (e) => {
       if (e.target === settingsOverlay) settingsOverlay.classList.add('hidden');
+    });
+
+    document.getElementById('theme-select')?.addEventListener('change', (e) => {
+      if (typeof Theme === 'undefined') return;
+      Theme.setPreference(e.target.value);
+      UI.toast(`Appearance set to ${e.target.options[e.target.selectedIndex].text}`, 'success');
     });
 
     document.getElementById('proactive-enabled')?.addEventListener('change', (e) => {

@@ -8,8 +8,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="js/theme.js"></script>
   <link rel="stylesheet" href="css/main.css" />
   <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/v2-foundation.css" />
+  <link rel="stylesheet" href="css/v3-shell.css" />
 
   <!-- Firebase Compat SDK (v10) — must load BEFORE auth.js -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -144,6 +147,7 @@
     <!-- TOP BAR -->
     <header class="topbar">
       <div class="topbar-left">
+        <button class="icon-btn" id="toggle-context-btn" title="Open workspace navigation" aria-label="Open workspace navigation">☰</button>
         <div class="logo-orb small"></div>
         <span class="topbar-name">TWINKLE</span>
         <span class="topbar-sub" id="active-project-label"></span>
@@ -156,6 +160,7 @@
       </div>
       <div class="topbar-right">
         <div class="clock" id="clock"></div>
+        <button class="command-trigger" id="command-palette-btn" title="Open command palette" aria-label="Open command palette">⌕ <span>Search</span><kbd>Ctrl K</kbd></button>
         <button class="icon-btn" id="toggle-tools-btn" title="Tools Panel">⚡</button>
         <button class="icon-btn" id="clear-chat-btn" title="Clear Chat">🗑</button>
         <button class="icon-btn" id="settings-btn" title="Settings">⚙️</button>
@@ -170,6 +175,23 @@
 
     <!-- CONTENT AREA -->
     <div class="content-area">
+
+      <nav class="app-rail" aria-label="Primary workspace navigation">
+        <div class="rail-brand" aria-label="Twinkle">✦</div>
+        <div class="rail-nav">
+          <button class="rail-button" data-workspace="home" title="Home"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V20H4v-9.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><span>Home</span></button>
+          <button class="rail-button" data-workspace="chat" title="Chats"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><span>Chats</span></button>
+          <button class="rail-button" data-workspace="projects" title="Projects"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3.5 7.5h7l2-2h8v13h-17v-11Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><span>Projects</span></button>
+          <button class="rail-button" data-workspace="memory" title="Memory"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3a5 5 0 0 1 4.8 3.6A4.5 4.5 0 0 1 18 15.3 5 5 0 0 1 8.3 17 4.5 4.5 0 0 1 7 8.4 5 5 0 0 1 12 3Z" stroke="currentColor" stroke-width="1.7"/><path d="M12 7v10M8.5 10.5H12m0 3h3.5" stroke="currentColor" stroke-width="1.5"/></svg><span>Memory</span></button>
+          <button class="rail-button" data-workspace="tasks" title="Tasks"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 7 2 2 4-4M13 7h6M5 15l2 2 4-4M13 15h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Tasks</span></button>
+          <button class="rail-button" data-workspace="files" title="Files"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 3.5h8l4 4v13H6v-17Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14 3.5v4h4" stroke="currentColor" stroke-width="1.7"/></svg><span>Files</span></button>
+        </div>
+        <div class="rail-spacer"></div>
+        <button class="rail-button" data-workspace="automation" title="Automation"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m13 2-8 12h7l-1 8 8-12h-7l1-8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><span>Automate</span></button>
+      </nav>
+
+      <div class="workspace-scrim" id="workspace-scrim" aria-hidden="true"></div>
+      <section class="workspace-surface" id="workspace-surface" aria-live="polite"></section>
 
       <!-- LEFT SIDEBAR: Chat History + Projects -->
       <aside class="sidebar sidebar-left" id="sidebar-chats">
@@ -268,6 +290,14 @@
         </div>
       </aside>
     </div>
+
+    <nav class="mobile-bottom-nav" aria-label="Mobile workspace navigation">
+      <button class="mobile-nav-item" data-workspace="home"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V20H4v-9.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><span>Home</span></button>
+      <button class="mobile-nav-item" data-workspace="chat"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><span>Chats</span></button>
+      <button class="mobile-nav-item" data-workspace="projects"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3.5 7.5h7l2-2h8v13h-17v-11Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg><span>Projects</span></button>
+      <button class="mobile-nav-item" data-workspace="tasks"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 7 2 2 4-4M13 7h6M5 15l2 2 4-4M13 15h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Tasks</span></button>
+      <button class="mobile-nav-item" data-workspace="memory"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3a5 5 0 0 1 4.8 3.6A4.5 4.5 0 0 1 18 15.3 5 5 0 0 1 8.3 17 4.5 4.5 0 0 1 7 8.4 5 5 0 0 1 12 3Z" stroke="currentColor" stroke-width="1.7"/></svg><span>Memory</span></button>
+    </nav>
   </div>
 
   <!-- ══════════════════════════════════════════════════════
@@ -292,6 +322,16 @@
           <label>Test AI Connection</label>
           <button class="btn-secondary small" id="settings-test-api">🔌 Run Test</button>
           <div id="settings-test-result" style="margin-top:8px;font-size:12px;font-family:var(--font-code);color:var(--text-secondary);line-height:1.6;display:none;white-space:pre-wrap;"></div>
+        </div>
+        <div class="settings-row">
+          <label for="theme-select">Appearance</label>
+          <select class="theme-select" id="theme-select">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="amoled">AMOLED</option>
+          </select>
+          <div class="settings-help">Uses a semantic color system and remembers this device.</div>
         </div>
         <div class="settings-row">
           <div class="settings-choice-row">
@@ -411,9 +451,12 @@
   <script src="js/memory.js"></script>
   <script src="js/domains.js"></script>
   <script src="js/permission.js"></script>
+  <script src="js/markdown.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/api.js"></script>
   <script src="js/proactive.js"></script>
+  <script src="js/workspace.js"></script>
+  <script src="js/command-palette.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

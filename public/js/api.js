@@ -175,7 +175,58 @@ ${domains.length > 0 ? `- Main focus areas: ${domains.join(', ')}` : ''}
   }
 
   /* ── SEND MESSAGE VIA NETLIFY PROXY ─────────────────────── */
-  async function streamMessage(userText, domain, { onChunk, onDone, onError }) {
+  function parseSSEBlock(block) {
+    let event = 'message';
+    const dataLines = [];
+    block.split(/\r?\n/).forEach(line => {
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+    });
+    if (!dataLines.length) return null;
+    const raw = dataLines.join('\n');
+    try {
+      return { event, data: JSON.parse(raw) };
+    } catch {
+      return { event, data: { text: raw } };
+    }
+  }
+
+  async function consumeEventStream(response, onEvent) {
+    if (!response.body?.getReader) throw new Error('Streaming is not supported by this browser.');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() || '';
+        blocks.map(parseSSEBlock).filter(Boolean).forEach(onEvent);
+        if (done) break;
+      }
+      if (buffer.trim()) {
+        const event = parseSSEBlock(buffer);
+        if (event) onEvent(event);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  async function parseErrorResponse(response) {
+    const data = await response.json().catch(() => ({}));
+    return data.error || `Error ${response.status}`;
+  }
+
+  async function streamMessage(userText, domain, {
+    onChunk = () => {},
+    onDone = () => {},
+    onError = () => {},
+    onPhase = () => {},
+    signal,
+  }) {
     // Throttle
     const now     = Date.now();
     const elapsed = now - _lastRequestTime;
@@ -196,13 +247,17 @@ ${domains.length > 0 ? `- Main focus areas: ${domains.join(', ')}` : ''}
 
     const systemPrompt = buildSystemPrompt(domain);
 
+    let fullText = '';
+    let streamMeta = {};
+
     try {
-      const res = await fetch('/.netlify/functions/chat', {
+      let res = await fetch('/.netlify/functions/chat-stream', {
         method: 'POST',
         headers: {
           'Content-Type':  'application/json',
           'Authorization': `Bearer ${token}`,
         },
+        signal,
         body: JSON.stringify({
           messages: _conversationHistory,
           systemPrompt,
@@ -223,41 +278,68 @@ ${domains.length > 0 ? `- Main focus areas: ${domains.join(', ')}` : ''}
         return;
       }
 
-      const data = await res.json();
-
-      if (!res.ok) {
+      if (!res.ok && [404, 405, 501].includes(res.status)) {
+        onPhase('fallback');
+        res = await fetch('/.netlify/functions/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          signal,
+          body: JSON.stringify({ messages: _conversationHistory, systemPrompt, domain }),
+        });
+        if (!res.ok) {
+          _conversationHistory.pop();
+          onError(await parseErrorResponse(res));
+          return;
+        }
+        const data = await res.json();
+        fullText = data.text || '';
+        streamMeta = data;
+        if (fullText) onChunk(fullText, fullText);
+      } else if (!res.ok) {
         _conversationHistory.pop();
-        onError(data.error || `Error ${res.status}`);
+        onError(await parseErrorResponse(res));
         return;
+      } else {
+        await consumeEventStream(res, ({ event, data }) => {
+          if (event === 'meta') streamMeta = { ...streamMeta, ...data };
+          if (event === 'phase') onPhase(data.phase || 'thinking');
+          if (event === 'delta' && data.text) {
+            fullText += data.text;
+            onChunk(fullText, data.text);
+          }
+          if (event === 'done') streamMeta = { ...streamMeta, ...data };
+          if (event === 'error') throw new Error(data.error || 'The AI stream was interrupted.');
+        });
       }
 
-      const fullText = data.text || '';
-
       // Save to history
-      _conversationHistory.push({ role: 'model', parts: [{ text: fullText }] });
+      if (fullText) _conversationHistory.push({ role: 'model', parts: [{ text: fullText }] });
       if (_conversationHistory.length > 40) {
         _conversationHistory = _conversationHistory.slice(-40);
       }
 
-      // Simulate streaming — word-by-word typewriter effect
-      const words = fullText.split(' ');
-      let displayed = '';
-      for (let i = 0; i < words.length; i++) {
-        displayed += (i === 0 ? '' : ' ') + words[i];
-        onChunk(displayed);
-        // Vary speed: pause slightly at sentence ends
-        const w = words[i];
-        const delay = (w.endsWith('.') || w.endsWith('?') || w.endsWith('!')) ? 55
-                    : w.endsWith(',') || w.endsWith(':') ? 35
-                    : 16;
-        await new Promise(r => setTimeout(r, delay));
-      }
-
-      onDone(fullText);
+      onDone(fullText, { ...streamMeta, cancelled: false });
 
     } catch (e) {
+      if (e.name === 'AbortError' || signal?.aborted) {
+        if (fullText) {
+          _conversationHistory.push({ role: 'model', parts: [{ text: fullText }] });
+        } else {
+          _conversationHistory.pop();
+        }
+        onDone(fullText, { ...streamMeta, cancelled: true });
+        return;
+      }
+      if (fullText) {
+        _conversationHistory.push({ role: 'model', parts: [{ text: fullText }] });
+        onDone(fullText, { ...streamMeta, cancelled: true, interrupted: true });
+        return;
+      }
       _conversationHistory.pop();
-      onError(`Network error: ${e.message}`);
+      onError(e.message || `Network error: ${e.message}`);
     }
   }
 
@@ -289,5 +371,8 @@ ${domains.length > 0 ? `- Main focus areas: ${domains.join(', ')}` : ''}
     }
   }
 
-  return { clearHistory, loadHistory, streamMessage, testConnection, buildSystemPrompt };
+  return {
+    clearHistory, loadHistory, streamMessage, testConnection, buildSystemPrompt,
+    parseSSEBlock, consumeEventStream,
+  };
 })();
