@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Twinkle — Personal AI Operator</title>
+  <meta name="description" content="Twinkle is your personal AI operator — think faster, execute better, achieve more." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="stylesheet" href="css/components.css" />
+
+  <!-- Firebase Compat SDK (v10) — must load BEFORE auth.js -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════════════════
+       AUTH LOADING — shown while Firebase resolves
+  ══════════════════════════════════════════════════════════ -->
+  <div id="auth-loading" class="auth-loading">
+    <div class="auth-loading-inner">
+      <div class="logo-orb large pulse"></div>
+      <span class="logo-text large loading-pulse">TWINKLE</span>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       LOGIN SCREEN
+  ══════════════════════════════════════════════════════════ -->
+  <div id="login-screen" class="login-screen hidden">
+    <div class="login-card">
+      <div class="login-logo">
+        <div class="logo-orb large"></div>
+        <span class="logo-text large">TWINKLE</span>
+      </div>
+      <p class="login-tagline">Your personal AI operator</p>
+      <p class="login-sub">Think faster. Execute better. Achieve more.</p>
+
+      <button id="google-signin-btn" class="google-signin-btn">
+        <!-- Google logo SVG -->
+        <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+          <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
+          <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/>
+          <path fill="#FBBC05" d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
+          <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
+        </svg>
+        Continue with Google
+      </button>
+
+      <p id="login-error" class="login-error hidden"></p>
+      <p class="login-note">Free to use · No credit card · Powered by Google Gemini</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       ONBOARDING MODAL (first-time users)
+  ══════════════════════════════════════════════════════════ -->
+  <div id="onboarding-overlay" class="permission-overlay hidden">
+    <div class="onboarding-card">
+
+      <!-- Header -->
+      <div class="onboarding-header">
+        <div class="logo-orb small"></div>
+        <span>Welcome to Twinkle</span>
+      </div>
+
+      <!-- Progress dots -->
+      <div class="ob-progress">
+        <div class="ob-dot active" id="ob-dot-1"></div>
+        <div class="ob-dot"        id="ob-dot-2"></div>
+        <div class="ob-dot"        id="ob-dot-3"></div>
+      </div>
+
+      <!-- Step 1: Name -->
+      <div class="onboarding-step" id="ob-step-1">
+        <h2>What should I call you?</h2>
+        <p>I'll personalise everything for you.</p>
+        <input type="text" id="ob-name" placeholder="Your first name" maxlength="40" autocomplete="off" />
+        <button class="btn-primary" id="ob-next-1">Continue →</button>
+      </div>
+
+      <!-- Step 2: Goal -->
+      <div class="onboarding-step hidden" id="ob-step-2">
+        <h2>What's your #1 goal right now?</h2>
+        <p>Be specific. I'll keep this in mind.</p>
+        <input type="text" id="ob-goal" placeholder="e.g. Build a profitable agency by 25" maxlength="120" autocomplete="off" />
+        <button class="btn-primary" id="ob-next-2">Continue →</button>
+      </div>
+
+      <!-- Step 3: Focus areas -->
+      <div class="onboarding-step hidden" id="ob-step-3">
+        <h2>What do you focus on?</h2>
+        <p>Select all that apply — I'll activate specialist modes for you.</p>
+        <div class="domain-select-chips" id="domain-chips">
+          <button class="domain-chip" data-domain="coding">💻 Coding</button>
+          <button class="domain-chip" data-domain="marketing">📣 Marketing</button>
+          <button class="domain-chip" data-domain="content">✍️ Content</button>
+          <button class="domain-chip" data-domain="leads">🎯 Lead Gen</button>
+          <button class="domain-chip" data-domain="designing">🎨 Design</button>
+          <button class="domain-chip" data-domain="research">🔍 Research</button>
+          <button class="domain-chip" data-domain="finance">💰 Finance</button>
+          <button class="domain-chip" data-domain="analytics">📊 Analytics</button>
+          <button class="domain-chip" data-domain="reviewing">🧾 Reviewing</button>
+        </div>
+        <button class="btn-primary" id="ob-finish">Start using Twinkle →</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       BOOT SCREEN
+  ══════════════════════════════════════════════════════════ -->
+  <div id="boot-screen" class="boot-screen hidden">
+    <div class="boot-content">
+      <div class="boot-logo">
+        <div class="logo-orb large pulse"></div>
+        <span class="logo-text large">TWINKLE</span>
+      </div>
+      <div class="boot-message" id="boot-message"></div>
+      <div class="boot-status" id="boot-status">
+        <div class="status-item" id="status-memory">
+          <span class="status-dot loading"></span><span>Memory</span>
+        </div>
+        <div class="status-item" id="status-ai">
+          <span class="status-dot loading"></span><span>AI Models</span>
+        </div>
+        <div class="status-item" id="status-tools">
+          <span class="status-dot loading"></span><span>Tools</span>
+        </div>
+      </div>
+      <button id="boot-enter" class="btn-primary hidden" style="width:auto;padding:10px 28px;margin-top:8px;">Enter →</button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       MAIN APP
+  ══════════════════════════════════════════════════════════ -->
+  <div id="main-app" class="main-app hidden">
+
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="logo-orb small"></div>
+        <span class="topbar-name">TWINKLE</span>
+        <span class="topbar-sub" id="active-project-label"></span>
+      </div>
+      <div class="topbar-center">
+        <div class="domain-indicator" id="domain-indicator">
+          <span class="domain-icon">🤖</span>
+          <span class="domain-label" id="domain-label">Ready</span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="clock" id="clock"></div>
+        <button class="icon-btn" id="toggle-tools-btn" title="Tools Panel">⚡</button>
+        <button class="icon-btn" id="clear-chat-btn" title="Clear Chat">🗑</button>
+        <button class="icon-btn" id="settings-btn" title="Settings">⚙️</button>
+        <!-- User profile -->
+        <div class="user-profile-topbar" id="user-profile-topbar">
+          <img class="user-avatar-topbar" id="user-avatar-img" src="" alt="" />
+          <span class="user-name-topbar" id="user-name-topbar"></span>
+          <button class="signout-btn" id="signout-btn" title="Sign out">↪</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- CONTENT AREA -->
+    <div class="content-area">
+
+      <!-- LEFT SIDEBAR: Chat History + Projects -->
+      <aside class="sidebar sidebar-left" id="sidebar-chats">
+        <button class="new-chat-btn" id="new-chat-btn">
+          <span class="nc-icon">✏️</span>New Chat
+        </button>
+        <div class="chat-search-wrap">
+          <input class="chat-search" id="chat-search" type="text" placeholder="Search chats…" />
+        </div>
+
+        <!-- Projects -->
+        <div id="projects-section">
+          <div class="projects-header">
+            <span class="projects-header-label">Projects</span>
+            <button class="new-project-btn" id="new-project-btn" title="New Project">+</button>
+          </div>
+          <div id="projects-list"></div>
+        </div>
+
+        <div style="border-top:1px solid var(--border-subtle);margin:6px 0;"></div>
+
+        <!-- Chat list -->
+        <div id="chat-history-list"></div>
+      </aside>
+
+      <!-- CHAT AREA -->
+      <main class="chat-area" id="chat-area">
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input-wrap">
+          <div class="chat-input-box">
+            <textarea
+              id="chat-input"
+              placeholder="Ask Twinkle anything…"
+              rows="1"
+              maxlength="4000"
+            ></textarea>
+            <div class="input-actions">
+              <span class="char-count" id="char-count">0 / 4000</span>
+              <button class="send-btn" id="send-btn" disabled>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M22 2L15 22 11 13 2 9l20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <p class="input-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line</p>
+        </div>
+      </main>
+
+      <!-- RIGHT SIDEBAR: Tools + News -->
+      <aside class="sidebar sidebar-right" id="sidebar-tools">
+        <div class="sidebar-header"><span>⚡ Tools</span></div>
+        <div class="sidebar-section">
+          <div class="section-label">PHONE</div>
+          <div class="tool-item">
+            <span class="tool-icon">📱</span>
+            <span class="tool-name">Android</span>
+            <span class="tool-badge disconnected" id="phone-badge">⚠ Not connected</span>
+          </div>
+          <button class="btn-secondary small full-width" id="connect-phone-btn">Connect via ADB</button>
+        </div>
+        <div class="sidebar-section">
+          <div class="section-label">LAPTOP TOOLS</div>
+          <div class="tool-grid" id="tool-grid"></div>
+        </div>
+        <div class="sidebar-section">
+          <div class="section-label">STATS</div>
+          <div class="stat-grid">
+            <div class="stat-item">
+              <div class="stat-value" id="stat-messages">0</div>
+              <div class="stat-label">Messages</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value" id="stat-tasks">0</div>
+              <div class="stat-label">Tasks Done</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value" id="stat-domains">0</div>
+              <div class="stat-label">Domains</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value" id="stat-memory-items">0</div>
+              <div class="stat-label">Chats</div>
+            </div>
+          </div>
+        </div>
+        <div class="sidebar-header" style="margin-top:auto;">
+          <span>📰 AI News</span>
+          <button class="news-refresh-btn" id="news-refresh-btn" title="Refresh">↻</button>
+        </div>
+        <div class="news-panel">
+          <div class="news-list" id="news-list">
+            <div class="news-loading">Loading AI news…</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       SETTINGS MODAL
+  ══════════════════════════════════════════════════════════ -->
+  <div id="settings-overlay" class="permission-overlay hidden">
+    <div class="permission-popup settings-popup">
+      <div class="permission-header">
+        <span>⚙️ Settings</span>
+        <button class="icon-btn small" id="settings-close">✕</button>
+      </div>
+      <div class="settings-body">
+        <!-- Account info -->
+        <div class="settings-row account-row" id="settings-account-row">
+          <img class="settings-avatar" id="settings-avatar" src="" alt="" />
+          <div class="settings-account-info">
+            <div class="settings-account-name"  id="settings-account-name"></div>
+            <div class="settings-account-email" id="settings-account-email"></div>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>Test AI Connection</label>
+          <button class="btn-secondary small" id="settings-test-api">🔌 Run Test</button>
+          <div id="settings-test-result" style="margin-top:8px;font-size:12px;font-family:var(--font-code);color:var(--text-secondary);line-height:1.6;display:none;white-space:pre-wrap;"></div>
+        </div>
+        <div class="settings-row">
+          <label>Edit your profile</label>
+          <button class="btn-secondary small" id="settings-edit-profile">✏️ Edit Profile</button>
+        </div>
+        <div class="settings-row">
+          <label>Clear all chats &amp; memory</label>
+          <button class="btn-danger small" id="settings-clear-memory">Clear Everything</button>
+        </div>
+        <div class="settings-row">
+          <label>Sign out</label>
+          <button class="btn-danger small" id="settings-signout">Sign Out</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       PERMISSION POPUP
+  ══════════════════════════════════════════════════════════ -->
+  <div id="permission-overlay" class="permission-overlay hidden">
+    <div class="permission-popup">
+      <div class="permission-header">
+        <span class="permission-icon">⚡</span>
+        <span>TWINKLE — Permission</span>
+      </div>
+      <div class="permission-body">
+        <div class="permission-row">
+          <span class="permission-key">Action</span>
+          <span class="permission-val" id="perm-action">—</span>
+        </div>
+        <div class="permission-row">
+          <span class="permission-key">Reason</span>
+          <span class="permission-val" id="perm-reason">—</span>
+        </div>
+      </div>
+      <div class="permission-footer">
+        <button class="btn-allow" id="perm-allow">✅ Allow</button>
+        <button class="btn-deny"  id="perm-deny">❌ Deny</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       PROJECT CREATE MODAL
+  ══════════════════════════════════════════════════════════ -->
+  <div id="project-overlay" class="permission-overlay hidden">
+    <div class="permission-popup settings-popup">
+      <div class="permission-header">
+        <span>📁 New Project</span>
+        <button class="icon-btn small" id="project-modal-close">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="project-form">
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:6px;">PROJECT NAME</label>
+            <input type="text" id="project-name-input" placeholder="e.g. CampusConnect, Creative Agency…" />
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:6px;">DESCRIPTION (optional)</label>
+            <textarea id="project-desc-input" placeholder="What is this project about?"></textarea>
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:6px;">COLOR</label>
+            <div class="project-colors" id="project-colors"></div>
+          </div>
+          <button class="btn-primary" id="project-create-btn" style="margin-top:4px;">Create Project</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       PHONE MODAL
+  ══════════════════════════════════════════════════════════ -->
+  <div id="phone-overlay" class="permission-overlay hidden">
+    <div class="permission-popup">
+      <div class="permission-header">
+        <span>📱 Connect Android Phone</span>
+        <button class="icon-btn small" id="phone-modal-close">✕</button>
+      </div>
+      <div class="settings-body">
+        <ol class="phone-steps">
+          <li>Enable <strong>Developer Options</strong> on your Android phone</li>
+          <li>Turn on <strong>USB Debugging</strong></li>
+          <li>Connect phone via USB to this laptop</li>
+          <li>Tap <strong>Allow</strong> on the phone popup</li>
+        </ol>
+        <p class="phone-note">ADB bridge coming in Phase 2 (requires local Node.js backend).</p>
+        <button class="btn-primary" id="phone-check-btn">Check ADB Status</button>
+        <div id="phone-adb-result" class="adb-result hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- ══════════════════════════════════════════════════════
+       SCRIPTS — order matters
+  ══════════════════════════════════════════════════════════ -->
+  <script src="js/auth.js"></script>
+  <script src="js/conversations.js"></script>
+  <script src="js/projects.js"></script>
+  <script src="js/news.js"></script>
+  <script src="js/memory.js"></script>
+  <script src="js/domains.js"></script>
+  <script src="js/permission.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
