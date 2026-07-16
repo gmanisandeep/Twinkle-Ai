@@ -255,6 +255,8 @@
      APP INIT
   ══════════════════════════════════════════════════════════ */
   function initApp() {
+    if (typeof I18n !== 'undefined') I18n.apply();
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
     updateTopbarUser();
     UI.startClock();
     UI.renderToolsGrid();
@@ -270,6 +272,10 @@
     loadOrCreateConversation();
     initProactiveCheckIns();
     if (typeof Workspace !== 'undefined') Workspace.init();
+    if (typeof TwinklePlatform !== 'undefined') {
+      TwinklePlatform.sync().then(() => Workspace?.refresh?.()).catch(() => {});
+      TwinklePlatform.request('jobs.runDue').then(() => TwinklePlatform.sync()).catch(() => {});
+    }
 
     const newsList    = document.getElementById('news-list');
     const newsRefresh = document.getElementById('news-refresh-btn');
@@ -484,6 +490,7 @@
           const pid = e.target.dataset.deleteProject;
           if (confirm(`Delete project "${Projects.get(pid)?.name}"?`)) {
             Projects.delete(pid);
+            TwinklePlatform?.request?.('projects.delete', { id: pid }).then(() => TwinklePlatform.sync()).catch(() => {});
             if (_activeProjectId === pid) { _activeProjectId = null; updateProjectLabel(); }
             renderSidebar();
           }
@@ -560,6 +567,66 @@
      CHAT INPUT
   ══════════════════════════════════════════════════════════ */
   function initChatInput() {
+    const agentModeBtn = document.getElementById('agent-mode-btn');
+    const privateModeBtn = document.getElementById('private-mode-btn');
+    const voiceBtn = document.getElementById('voice-input-btn');
+    const voiceOutputBtn = document.getElementById('voice-output-btn');
+    const uploadBtn = document.getElementById('knowledge-upload-btn');
+    const fileInput = document.getElementById('knowledge-file-input');
+    if (agentModeBtn) {
+      agentModeBtn.setAttribute('aria-pressed', localStorage.getItem('twinkle_agent_mode') === 'true' ? 'true' : 'false');
+      agentModeBtn.addEventListener('click', () => {
+        const enabled = agentModeBtn.getAttribute('aria-pressed') !== 'true';
+        agentModeBtn.setAttribute('aria-pressed', String(enabled));
+        localStorage.setItem('twinkle_agent_mode', String(enabled));
+        UI.toast(enabled ? 'Agent mode enabled' : 'Chat mode enabled', 'info');
+      });
+    }
+    privateModeBtn?.addEventListener('click', () => {
+      const enabled = privateModeBtn.getAttribute('aria-pressed') !== 'true';
+      privateModeBtn.setAttribute('aria-pressed', String(enabled));
+      UI.toast(enabled ? 'Private execution enabled for the next agent run' : 'Private execution disabled', 'info');
+    });
+    voiceBtn?.addEventListener('click', async () => {
+      Voice.stopSpeaking();
+      if (voiceBtn.classList.contains('is-listening')) {
+        Voice.stopListening();
+        return;
+      }
+      try {
+        const transcript = await Voice.listen({
+          onState: (state) => voiceBtn.classList.toggle('is-listening', state === 'listening'),
+          onTranscript: (text) => {
+            chatInput.value = text;
+            chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+          },
+        });
+        if (transcript) chatInput.focus();
+      } catch (error) { UI.toast(error.message, 'error'); }
+    });
+    if (voiceOutputBtn) {
+      voiceOutputBtn.setAttribute('aria-pressed', localStorage.getItem('twinkle_voice_output') === 'true' ? 'true' : 'false');
+      voiceOutputBtn.addEventListener('click', () => {
+        const enabled = voiceOutputBtn.getAttribute('aria-pressed') !== 'true';
+        voiceOutputBtn.setAttribute('aria-pressed', String(enabled));
+        localStorage.setItem('twinkle_voice_output', String(enabled));
+        if (!enabled) Voice.stopSpeaking();
+        UI.toast(enabled ? 'Spoken replies enabled' : 'Spoken replies disabled', 'info');
+      });
+    }
+    uploadBtn?.addEventListener('click', () => fileInput?.click());
+    fileInput?.addEventListener('change', async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      uploadBtn.disabled = true;
+      try {
+        const result = await TwinklePlatform.ingestFile(file, _activeProjectId || '');
+        UI.toast(`${file.name} added as ${result.chunkCount} searchable section(s).`, 'success');
+        if (typeof Workspace !== 'undefined') Workspace.refresh();
+      } catch (error) { UI.toast(error.message, 'error'); }
+      finally { uploadBtn.disabled = false; fileInput.value = ''; }
+    });
+
     chatInput.addEventListener('input', () => {
       chatInput.style.height = 'auto';
       chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
@@ -652,10 +719,49 @@
     let messageEl = null;
 
     try {
+      const agentMode = document.getElementById('agent-mode-btn')?.getAttribute('aria-pressed') === 'true';
+      if (agentMode) {
+        const execution = await TwinklePlatform.runAgent(text, {
+          projectId: _activeProjectId || '',
+          privacy: Auth.getPrefs().modelPrivacy || 'cloud',
+          temporary: document.getElementById('private-mode-btn')?.getAttribute('aria-pressed') === 'true',
+          signal: _activeController.signal,
+          onProgress: (state) => UI.setThinkingPhase(state.status === 'awaiting_approval' ? 'approval' : 'thinking'),
+          onApproval: (pending) => Permission.request(
+            `${pending.permission === 'dangerous' ? 'Confirm' : 'Allow'} ${pending.tool}`,
+            pending.rationale || `Twinkle wants to use ${pending.tool} with the shown arguments.`,
+          ),
+        });
+        document.getElementById('typing-indicator')?.remove();
+        UI.setInputGlow(false);
+        const responseText = execution.answer || execution.error || `Agent stopped with status: ${execution.status}.`;
+        if (document.getElementById('voice-output-btn')?.getAttribute('aria-pressed') === 'true') Voice.speak(responseText);
+        messageEl = UI.renderTwinkleMessage(responseText, domain, false);
+        Conversations.addMessage(_currentConvId, {
+          role: 'twinkle', text: responseText, domain: domain.id, time: Date.now(),
+          provider: execution.provider, model: execution.model, executionId: execution.id, verification: execution.verification,
+        });
+        const wasPrivate = document.getElementById('private-mode-btn')?.getAttribute('aria-pressed') === 'true';
+        if (!wasPrivate) Memory.log(`Agent ${execution.status}: ${text.slice(0, 120)}`);
+        if (wasPrivate) {
+          const conversation = Conversations.get(_currentConvId);
+          if (conversation?.messages?.at(-1)?.executionId === execution.id) {
+            conversation.messages = conversation.messages.slice(0, -2);
+            Conversations.save(conversation);
+          }
+        }
+        document.getElementById('private-mode-btn')?.setAttribute('aria-pressed', 'false');
+        UI.refreshStats();
+        renderSidebar();
+        _activeController = null;
+        setComposerSending(false);
+        return;
+      }
       await API.streamMessage(text, domain.id, {
         signal: _activeController.signal,
         onPhase: (phase) => UI.setThinkingPhase(phase),
-        onChunk: (chunk) => {
+        onChunk: (chunk, delta) => {
+          if (document.getElementById('voice-output-btn')?.getAttribute('aria-pressed') === 'true' && delta) Voice.enqueue(delta);
           if (!messageEl) {
             document.getElementById('typing-indicator')?.remove();
             messageEl = UI.renderTwinkleMessage(chunk, domain, true);
@@ -664,6 +770,7 @@
           }
         },
         onDone: (responseText, meta = {}) => {
+          if (document.getElementById('voice-output-btn')?.getAttribute('aria-pressed') === 'true') Voice.flush();
           UI.setInputGlow(false);
           if (messageEl) {
             UI.finalizeStreamingBubble(messageEl, responseText, { cancelled: meta.cancelled });
@@ -692,6 +799,7 @@
           setComposerSending(false);
         },
         onError: (errMsg) => {
+          Voice.stopSpeaking();
           UI.setInputGlow(false);
           document.getElementById('typing-indicator')?.remove();
           const errEl = document.createElement('div');
@@ -782,9 +890,13 @@
     const proactiveToggle = document.getElementById('proactive-enabled');
     const proactiveStatus = document.getElementById('proactive-status');
     const themeSelect = document.getElementById('theme-select');
+    const languageSelect = document.getElementById('language-select');
+    const privacySelect = document.getElementById('model-privacy-select');
     if (themeSelect && typeof Theme !== 'undefined') {
       themeSelect.value = Theme.getPreference();
     }
+    if (languageSelect && typeof I18n !== 'undefined') languageSelect.value = I18n.locale();
+    if (privacySelect) privacySelect.value = prefs.modelPrivacy === 'local' ? 'local' : 'cloud';
     if (proactiveToggle && profile && typeof Proactive !== 'undefined') {
       proactiveToggle.checked = Proactive.getSettings(profile.uid).enabled;
     }
@@ -811,6 +923,18 @@
       if (typeof Theme === 'undefined') return;
       Theme.setPreference(e.target.value);
       UI.toast(`Appearance set to ${e.target.options[e.target.selectedIndex].text}`, 'success');
+    });
+
+    document.getElementById('language-select')?.addEventListener('change', (e) => {
+      if (typeof I18n === 'undefined') return;
+      I18n.setLocale(e.target.value);
+      I18n.apply();
+      UI.toast('Language preference saved.', 'success');
+    });
+
+    document.getElementById('model-privacy-select')?.addEventListener('change', (e) => {
+      Auth.savePrefs({ modelPrivacy: e.target.value === 'local' ? 'local' : 'cloud' });
+      UI.toast(e.target.value === 'local' ? 'Local-model mode enabled' : 'Cloud-provider mode enabled', 'success');
     });
 
     document.getElementById('proactive-enabled')?.addEventListener('change', (e) => {
@@ -850,6 +974,23 @@
       settingsOverlay.classList.add('hidden');
       onboardingOverlay._initialized = false; // allow re-init
       showOnboarding();
+    });
+
+    document.getElementById('settings-export-data')?.addEventListener('click', async () => {
+      try {
+        await TwinklePlatform.exportAccount();
+        UI.toast('Your Twinkle data export is ready.', 'success');
+      } catch (error) { UI.toast(error.message, 'error'); }
+    });
+
+    document.getElementById('settings-delete-account-data')?.addEventListener('click', async () => {
+      const allowed = await Permission.request('Delete server data', 'This permanently deletes server-side memory, projects, knowledge, jobs, usage records, and execution logs for your account.');
+      if (!allowed) return;
+      try {
+        await TwinklePlatform.request('account.delete');
+        UI.toast('Server-side Twinkle data deleted.', 'success');
+        if (typeof Workspace !== 'undefined') Workspace.refresh();
+      } catch (error) { UI.toast(error.message, 'error'); }
     });
 
     // Clear memory
@@ -911,6 +1052,7 @@
       if (!name) { UI.toast('Enter a project name', 'error'); return; }
 
       const proj       = Projects.create(name, desc, selectedColor);
+      TwinklePlatform?.request?.('projects.upsert', { id: proj.id, name, description: desc, color: selectedColor }).then(() => TwinklePlatform.sync()).catch(() => {});
       _activeProjectId = proj.id;
       updateProjectLabel();
       projectOverlay.classList.add('hidden');

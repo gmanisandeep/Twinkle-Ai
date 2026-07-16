@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /twinkleUsers/{userId}/{document=**} {
+      // Twinkle platform data is server-owned. Firebase Admin credentials used
+      // by the gateway bypass rules; browser clients receive no direct access.
+      allow read, write: if false;
+    }
+  }
+}

@@ -54,12 +54,17 @@ Optional production controls:
 
 - `DEEPSEEK_MODEL` (default `deepseek-v4-pro`)
 - `GEMINI_MODELS` (comma-separated fallback order)
-- `ALLOWED_ORIGINS` (comma-separated browser origins)
-- `RATE_LIMIT_PER_MINUTE` (default `20` per authenticated user)
-- `PROVIDER_TIMEOUT_MS` (default `45000`)
+- `ALLOWED_ORIGINS` (up to 50 comma-separated, exact HTTP(S) browser origins)
+- `RATE_LIMIT_PER_MINUTE` (default `20` per authenticated user and warm function instance)
+- `RATE_LIMIT_WINDOW_MS` (default `60000`, clamped between 1 second and 1 hour)
+- `PROVIDER_TIMEOUT_MS` (default `45000`, clamped between 5 and 120 seconds)
 
 The gateway accepts same-origin browser calls automatically. Provider keys are
 read only inside Netlify Functions and must never be added to files under
 `public/`.
+
+The built-in rate limiter is a bounded, best-effort safeguard in each warm
+serverless function instance. Use a durable shared rate-limit store if strict
+cross-instance enforcement is required.
 
 Do not commit real secret values.

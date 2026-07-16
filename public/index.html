@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b0b0b" />
+  <link rel="manifest" href="/manifest.webmanifest" />
   <title>Twinkle — Personal AI Operator</title>
   <meta name="description" content="Twinkle is your personal AI operator — think faster, execute better, achieve more." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -229,6 +231,12 @@
               maxlength="4000"
             ></textarea>
             <div class="input-actions">
+              <input id="knowledge-file-input" type="file" hidden accept=".pdf,.docx,.txt,.md,.csv,.tsv,.json,.js,.mjs,.cjs,.ts,.tsx,.jsx,.html,.css,.py,.java,.c,.cpp,.h,.sql,.xml,.yaml,.yml,text/*,image/jpeg,image/png,image/webp,image/gif" />
+              <button class="composer-tool-btn" id="knowledge-upload-btn" type="button" title="Add a file to project knowledge" aria-label="Add a file to project knowledge">+</button>
+              <button class="composer-tool-btn" id="voice-input-btn" type="button" title="Speak to Twinkle" aria-label="Start voice input">Voice</button>
+              <button class="composer-tool-btn" id="voice-output-btn" type="button" aria-pressed="false" title="Speak Twinkle replies" aria-label="Toggle spoken replies">Speak</button>
+              <button class="agent-mode-btn" id="agent-mode-btn" type="button" aria-pressed="false" title="Let Twinkle plan and use approved tools">Agent</button>
+              <button class="agent-mode-btn" id="private-mode-btn" type="button" aria-pressed="false" title="Do not retrieve memory or retain the agent execution">Private</button>
               <span class="char-count" id="char-count">0 / 4000</span>
               <button class="send-btn" id="send-btn" disabled>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -349,6 +357,30 @@
           <button class="btn-secondary small" id="settings-edit-profile">✏️ Edit Profile</button>
         </div>
         <div class="settings-row">
+          <label>Data and privacy</label>
+          <div class="settings-action-row">
+            <button class="btn-secondary small" id="settings-export-data">Export my data</button>
+            <button class="btn-danger small" id="settings-delete-account-data">Delete server data</button>
+          </div>
+          <div class="settings-help">Memory, project knowledge, jobs, execution logs, and usage records are isolated by your authenticated user ID.</div>
+        </div>
+        <div class="settings-row">
+          <label for="language-select">Language</label>
+          <select class="theme-select" id="language-select">
+            <option value="en">English</option>
+            <option value="hi">Hindi</option>
+            <option value="te">Telugu</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <label for="model-privacy-select">Model privacy</label>
+          <select class="theme-select" id="model-privacy-select">
+            <option value="cloud">Cloud providers</option>
+            <option value="local">Local Ollama only</option>
+          </select>
+          <div class="settings-help">Local mode fails closed when the self-hosted Ollama gateway is unavailable.</div>
+        </div>
+        <div class="settings-row">
           <label>Clear all chats &amp; memory</label>
           <button class="btn-danger small" id="settings-clear-memory">Clear Everything</button>
         </div>
@@ -454,6 +486,9 @@
   <script src="js/markdown.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/api.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/platform.js"></script>
+  <script src="js/voice.js"></script>
   <script src="js/proactive.js"></script>
   <script src="js/workspace.js"></script>
   <script src="js/command-palette.js"></script>

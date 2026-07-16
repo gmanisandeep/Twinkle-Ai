@@ -1,4 +1,5 @@
 import shared from './_shared.cjs';
+import providers from './_platform/providers.cjs';
 
 const {
   bearerToken,
@@ -11,6 +12,7 @@ const {
   validateChatRequest,
   verifyFirebaseToken,
 } = shared;
+const { providerHealth } = providers;
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
@@ -195,17 +197,23 @@ function normalizedStream(upstream, provider, model, id) {
 export default async (request) => {
   const id = requestId();
   const origin = request.headers.get('origin') || '';
-  const host = request.headers.get('host') || '';
-  const headers = responseHeaders(origin, host, id);
+  const requestUrl = new URL(request.url);
+  const host = request.headers.get('host') || requestUrl.host;
+  const protocol = requestUrl.protocol.replace(/:$/, '');
+  const headers = responseHeaders(origin, host, id, protocol);
 
-  if (!originAllowed(origin, host)) return jsonResponse(403, headers, { error: 'Origin not allowed.', requestId: id });
+  if (!originAllowed(origin, host, protocol)) return jsonResponse(403, headers, { error: 'Origin not allowed.', requestId: id });
   if (request.method === 'OPTIONS') return new Response('', { status: 204, headers });
   if (request.method !== 'POST') return jsonResponse(405, headers, { error: 'Method not allowed.', requestId: id });
 
   const config = providerConfig();
-  if (!process.env.FIREBASE_API_KEY || (!config.deepSeekKey && !config.geminiKey)) {
+  const configuredProviders = providerHealth().filter((provider) => provider.configured);
+  if (!process.env.FIREBASE_API_KEY || !configuredProviders.length) {
     console.error(`[Twinkle:${id}] Missing Firebase configuration or AI provider key`);
     return jsonResponse(500, headers, { error: 'Server not configured. Contact admin.', requestId: id });
+  }
+  if (!config.deepSeekKey && !config.geminiKey && configuredProviders.length) {
+    return jsonResponse(501, headers, { error: 'Streaming is unavailable for the configured provider; use the chat fallback.', requestId: id });
   }
 
   const idToken = bearerToken(request.headers.get('authorization'));
@@ -220,11 +228,11 @@ export default async (request) => {
   if (!user?.localId) return jsonResponse(401, headers, { error: 'Session expired. Please sign in again.', requestId: id });
 
   const rate = checkRateLimit(user.localId);
+  headers['X-RateLimit-Limit'] = String(rate.limit);
+  headers['X-RateLimit-Remaining'] = String(rate.remaining);
   if (!rate.allowed) {
     return jsonResponse(429, headers, { error: 'Too many requests. Please wait and try again.', requestId: id }, {
       'Retry-After': String(rate.retryAfter),
-      'X-RateLimit-Limit': String(rate.limit),
-      'X-RateLimit-Remaining': String(rate.remaining),
     });
   }
 

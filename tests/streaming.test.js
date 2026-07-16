@@ -46,7 +46,11 @@ test('stream endpoint normalizes provider SSE without exposing credentials', asy
     const streamFunction = await import(moduleUrl);
     const response = await streamFunction.default(new Request('https://example.test/.netlify/functions/chat-stream', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer firebase-token' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer firebase-token',
+        origin: 'https://example.test',
+      },
       body: JSON.stringify({
         systemPrompt: 'You are Twinkle.',
         messages: [{ role: 'user', parts: [{ text: 'Hi' }] }],
@@ -55,6 +59,9 @@ test('stream endpoint normalizes provider SSE without exposing credentials', asy
 
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type'), /text\/event-stream/);
+    assert.equal(response.headers.get('access-control-allow-origin'), 'https://example.test');
+    assert.equal(response.headers.get('x-ratelimit-limit'), '20');
+    assert.equal(response.headers.get('x-ratelimit-remaining'), '19');
     const body = await response.text();
     assert.match(body, /event: meta/);
     assert.match(body, /event: phase/);
@@ -64,6 +71,7 @@ test('stream endpoint normalizes provider SSE without exposing credentials', asy
     assert.doesNotMatch(body, /deepseek-test-secret/);
 
     const providerCall = calls.find(call => call.url.includes('api.deepseek.com'));
+    assert.ok(providerCall.options.signal instanceof AbortSignal);
     const requestBody = JSON.parse(providerCall.options.body);
     assert.equal(requestBody.stream, true);
     assert.equal(requestBody.messages[1].content, 'Hi');

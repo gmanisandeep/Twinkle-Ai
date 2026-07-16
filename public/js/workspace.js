@@ -28,7 +28,8 @@
     const proactive = profile.uid && global?.Proactive?.getSettings
       ? global.Proactive.getSettings(profile.uid)
       : { enabled: false };
-    return { profile, prefs, projects, conversations, memory, stats, proactive };
+    const platform = global?.TwinklePlatform?.snapshot?.() || {};
+    return { profile, prefs, projects, conversations, memory, stats, proactive, platform };
   }
 
   function dayGreeting(date = new Date()) {
@@ -131,23 +132,24 @@
   }
 
   function renderMemory(data) {
-    const memories = data.memory.log || [];
+    const remoteMemories = (data.platform.memories || []).map(item => ({ id: item.id, text: item.text, ts: item.createdAt || item.updatedAt, remote: true }));
+    const memories = [...remoteMemories, ...(data.memory.log || [])];
     const goals = [data.prefs.goal, ...(data.memory.projects || []).map(project => project.name)].filter(Boolean);
     return renderCollectionPage({
       eyebrow: 'Continuity',
       title: 'Memory',
       description: 'A transparent view of what Twinkle remembers on this device.',
-      action: '<button class="page-secondary-action" data-workspace-action="open-settings">Memory settings</button>',
+      action: '<button class="page-primary-action" data-workspace-action="add-memory">Add memory</button>',
       content: `<div class="memory-layout">
         <section class="memory-feature"><span class="memory-orb" aria-hidden="true"></span><small>Current direction</small><h2>${escapeHTML(data.prefs.goal || 'No primary goal set')}</h2><p>Edit your profile to control this context.</p></section>
         <section class="memory-column"><h2>Pinned context</h2>${goals.length ? goals.map(goal => `<div class="memory-note"><span>◇</span><p>${escapeHTML(goal)}</p></div>`).join('') : '<div class="honest-empty"><span>No pinned context yet.</span></div>'}</section>
-        <section class="memory-column timeline-column"><h2>Recent timeline</h2>${memories.length ? memories.slice(0, 12).map(item => `<div class="timeline-row"><span></span><div><strong>${escapeHTML(item.text)}</strong><small>${new Date(item.ts).toLocaleString()}</small></div></div>`).join('') : '<div class="honest-empty"><span>Activity will appear as Twinkle completes work.</span></div>'}</section>
+        <section class="memory-column timeline-column"><h2>Recent timeline</h2>${memories.length ? memories.slice(0, 12).map(item => `<div class="timeline-row"><span></span><div><strong>${escapeHTML(item.text)}</strong><small>${new Date(item.ts).toLocaleString()}</small>${item.remote ? `<button class="text-action" data-delete-memory="${escapeHTML(item.id)}">Delete</button>` : ''}</div></div>`).join('') : '<div class="honest-empty"><span>Activity will appear as Twinkle completes work.</span></div>'}</section>
       </div>`
     });
   }
 
   function renderTasks(data) {
-    const tasks = data.memory.tasks || [];
+    const tasks = [...(data.platform.tasks || []), ...(data.memory.tasks || [])];
     return renderCollectionPage({
       eyebrow: 'Execution',
       title: 'Task center',
@@ -158,15 +160,19 @@
   }
 
   function renderRoadmapPage(view, data) {
-    const page = view === 'files' ? {
-      eyebrow: 'Knowledge', title: 'Files', icon: '⌁', description: 'A future home for documents, references, and generated artifacts.', detail: 'The current Twinkle architecture does not store files yet. This surface is intentionally honest until secure upload and preview infrastructure is added.'
-    } : {
-      eyebrow: 'Systems', title: 'Automation', icon: '⌘', description: 'Proactive routines and repeatable AI workflows.', detail: `Proactive check-ins are currently ${data.proactive.enabled ? 'enabled' : 'disabled'}. A visual automation builder is planned as a separate migration slice.`
-    };
+    if (view === 'files') {
+      const sources = data.platform.sources || [];
+      return renderCollectionPage({
+        eyebrow: 'Knowledge', title: 'Files', description: 'Private project sources searchable by Twinkle with citations.',
+        action: '<button class="page-primary-action" data-workspace-action="upload-file">Upload file</button>',
+        content: sources.length ? `<div class="project-card-grid">${sources.map(source => `<article class="project-space-card"><small>${escapeHTML(source.type || 'document')}</small><strong>${escapeHTML(source.title)}</strong><p>${Number(source.size || 0).toLocaleString()} bytes · ${new Date(source.createdAt || source.updatedAt).toLocaleDateString()}</p><span>Searchable knowledge</span></article>`).join('')}</div>` : '<div class="large-empty"><span>⌁</span><h2>No knowledge sources yet</h2><p>Upload PDF, DOCX, text, CSV, notes, or source code. Twinkle stores extracted text, not the original file.</p><button class="page-primary-action" data-workspace-action="upload-file">Upload a source</button></div>'
+      });
+    }
+    const jobs = data.platform.jobs || [];
     return renderCollectionPage({
-      eyebrow: page.eyebrow, title: page.title, description: page.description,
-      action: '<button class="page-secondary-action" data-workspace-action="open-settings">Open settings</button>',
-      content: `<div class="large-empty roadmap-empty"><span>${page.icon}</span><h2>Foundation ready</h2><p>${escapeHTML(page.detail)}</p><small>Planned for a later verified slice</small></div>`
+      eyebrow: 'Systems', title: 'Automation', description: 'Scheduled goals with explicit tool approvals and execution logs.',
+      action: '<button class="page-primary-action" data-workspace-action="new-automation">New automation</button>',
+      content: jobs.length ? `<div class="task-board">${jobs.map(job => `<article class="task-card"><span>${job.enabled ? '↻' : '○'}</span><div><strong>${escapeHTML(job.name)}</strong><small>${escapeHTML(job.goal)} · next ${job.nextRunAt ? new Date(job.nextRunAt).toLocaleString() : 'manual'}</small></div></article>`).join('')}</div>` : '<div class="large-empty"><span>⌘</span><h2>No scheduled agents</h2><p>Create a recurring goal. Away-from-browser execution requires the configured persistent worker.</p><button class="page-primary-action" data-workspace-action="new-automation">Create automation</button></div>'
     });
   }
 
@@ -225,6 +231,13 @@
         projectItem?.click();
       });
     });
+    surface.querySelectorAll('[data-delete-memory]').forEach(button => {
+      button.addEventListener('click', () => {
+        if (!global.confirm?.('Delete this memory?')) return;
+        global.TwinklePlatform?.request?.('memory.delete', { id: button.dataset.deleteMemory })
+          .then(() => global.TwinklePlatform.sync()).then(() => refresh()).catch((error) => global.UI?.toast?.(error.message, 'error'));
+      });
+    });
   }
 
   function runAction(action) {
@@ -243,6 +256,21 @@
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.focus();
       }
+    } else if (action === 'upload-file') {
+      global.document.getElementById('knowledge-file-input')?.click();
+    } else if (action === 'new-automation') {
+      const name = global.prompt?.('Automation name:');
+      if (!name) return;
+      const goal = global.prompt?.('What should Twinkle accomplish?');
+      if (!goal) return;
+      const minutes = Number(global.prompt?.('Repeat every how many minutes? Minimum 15.', '1440')) || 1440;
+      global.TwinklePlatform?.request?.('jobs.upsert', { name, goal, schedule: { type: 'interval', minutes }, enabled: true })
+        .then(() => global.TwinklePlatform.sync()).then(() => refresh()).catch((error) => global.UI?.toast?.(error.message, 'error'));
+    } else if (action === 'add-memory') {
+      const text = global.prompt?.('What should Twinkle remember?');
+      if (!text) return;
+      global.TwinklePlatform?.request?.('memory.upsert', { text, category: 'user', pinned: true })
+        .then(() => global.TwinklePlatform.sync()).then(() => refresh()).catch((error) => global.UI?.toast?.(error.message, 'error'));
     }
   }
 
@@ -272,6 +300,7 @@
     if (initialized || !global?.document) return;
     initialized = true;
     global.document.addEventListener('click', handleShellClick);
+    global.document.addEventListener('twinkle:platform-sync', () => renderActiveView());
     if (global.matchMedia?.('(max-width: 1100px)').matches) {
       global.document.getElementById('sidebar-tools')?.classList.add('collapsed');
     }

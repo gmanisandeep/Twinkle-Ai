@@ -21,22 +21,16 @@ test('routes authenticated chat requests to DeepSeek without exposing the key', 
   global.fetch = async (url, options) => {
     calls.push({ url, options });
     if (url.includes('identitytoolkit.googleapis.com')) {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ users: [{ localId: 'user-123' }] }),
-      };
+      return new Response(JSON.stringify({ users: [{ localId: 'user-123' }] }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
     }
     if (url === 'https://api.deepseek.com/chat/completions') {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return new Response(JSON.stringify({
           model: 'deepseek-v4-pro',
           choices: [{ message: { content: 'Ready to help.' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 12, completion_tokens: 4 },
-        }),
-      };
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
     throw new Error(`Unexpected URL: ${url}`);
   };
@@ -45,7 +39,12 @@ test('routes authenticated chat requests to DeepSeek without exposing the key', 
     const { handler } = require(functionPath);
     const response = await handler({
       httpMethod: 'POST',
-      headers: { authorization: 'Bearer firebase-id-token' },
+      rawUrl: 'https://twinkleos.netlify.app/.netlify/functions/chat',
+      headers: {
+        authorization: 'Bearer firebase-id-token',
+        host: 'twinkleos.netlify.app',
+        origin: 'https://twinkleos.netlify.app',
+      },
       body: JSON.stringify({
         systemPrompt: 'You are Twinkle.',
         messages: [{ role: 'user', parts: [{ text: 'Hello' }] }],
@@ -57,9 +56,13 @@ test('routes authenticated chat requests to DeepSeek without exposing the key', 
     assert.equal(body.provider, 'deepseek');
     assert.equal(body.model, 'deepseek-v4-pro');
     assert.equal(body.text, 'Ready to help.');
+    assert.equal(response.headers['Access-Control-Allow-Origin'], 'https://twinkleos.netlify.app');
+    assert.equal(response.headers['X-RateLimit-Limit'], '20');
+    assert.equal(response.headers['X-RateLimit-Remaining'], '19');
 
     const providerCall = calls.find(call => call.url.includes('api.deepseek.com'));
     assert.equal(providerCall.options.headers.Authorization, 'Bearer test-deepseek-secret');
+    assert.ok(providerCall.options.signal instanceof AbortSignal);
     assert.doesNotMatch(response.body, /test-deepseek-secret/);
 
     const requestBody = JSON.parse(providerCall.options.body);

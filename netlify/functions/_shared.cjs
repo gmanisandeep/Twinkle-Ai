@@ -13,6 +13,9 @@ const MAX_SYSTEM_PROMPT = 8_000;
 const DEFAULT_RATE_LIMIT = 20;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
 const DEFAULT_PROVIDER_TIMEOUT_MS = 45_000;
+const MAX_CONFIGURED_ORIGINS = 50;
+const MAX_PROVIDER_MODELS = 5;
+const MAX_RATE_BUCKETS = 5_000;
 
 const rateBuckets = new Map();
 
@@ -26,30 +29,41 @@ function requestId() {
   return crypto.randomUUID();
 }
 
+function normalizedOrigin(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (!['http:', 'https:'].includes(url.protocol)) return '';
+    if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) return '';
+    return url.origin;
+  } catch {
+    return '';
+  }
+}
+
 function configuredOrigins() {
   return new Set(
     (process.env.ALLOWED_ORIGINS || '')
       .split(',')
-      .map((value) => value.trim().replace(/\/$/, ''))
+      .slice(0, MAX_CONFIGURED_ORIGINS)
+      .map(normalizedOrigin)
       .filter(Boolean),
   );
 }
 
-function originAllowed(origin, host) {
+function originAllowed(origin, host, protocol = 'https') {
   if (!origin) return true;
-  const normalized = origin.replace(/\/$/, '');
+  const normalized = normalizedOrigin(origin);
+  if (!normalized) return false;
   if (configuredOrigins().has(normalized)) return true;
-  try {
-    return new URL(normalized).host === host;
-  } catch {
-    return false;
-  }
+  const safeProtocol = String(protocol || '').replace(/:$/, '').toLowerCase();
+  if (!['http', 'https'].includes(safeProtocol)) return false;
+  return normalized === normalizedOrigin(`${safeProtocol}://${host}`);
 }
 
-function responseHeaders(origin, host, id, contentType = 'application/json; charset=utf-8') {
-  const allowed = originAllowed(origin, host);
+function responseHeaders(origin, host, id, protocol = 'https', contentType = 'application/json; charset=utf-8') {
+  const allowed = originAllowed(origin, host, protocol);
   return {
-    'Access-Control-Allow-Origin': allowed && origin ? origin.replace(/\/$/, '') : 'null',
+    'Access-Control-Allow-Origin': allowed && origin ? normalizedOrigin(origin) : 'null',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Cache-Control': 'no-store',
@@ -61,8 +75,8 @@ function responseHeaders(origin, host, id, contentType = 'application/json; char
 }
 
 function bearerToken(value) {
-  const token = String(value || '').replace(/^Bearer\s+/i, '').trim();
-  return token.length <= 10_000 ? token : '';
+  const match = /^Bearer[\t ]+(\S+)$/i.exec(String(value || '').trim());
+  return match && match[1].length <= 10_000 ? match[1] : '';
 }
 
 function validateChatRequest(input) {
@@ -122,17 +136,19 @@ function checkRateLimit(userId) {
   const windowMs = envNumber('RATE_LIMIT_WINDOW_MS', DEFAULT_RATE_WINDOW_MS, 1_000, 3_600_000);
   const now = Date.now();
   const existing = rateBuckets.get(userId);
+  if (!existing && rateBuckets.size >= MAX_RATE_BUCKETS) {
+    for (const [key, value] of rateBuckets) {
+      if (now >= value.resetAt) rateBuckets.delete(key);
+    }
+    if (rateBuckets.size >= MAX_RATE_BUCKETS) {
+      return { allowed: false, limit, remaining: 0, retryAfter: Math.max(1, Math.ceil(windowMs / 1_000)) };
+    }
+  }
   const bucket = !existing || now >= existing.resetAt
     ? { count: 0, resetAt: now + windowMs }
     : existing;
   bucket.count += 1;
   rateBuckets.set(userId, bucket);
-
-  if (rateBuckets.size > 2_000) {
-    for (const [key, value] of rateBuckets) {
-      if (now >= value.resetAt) rateBuckets.delete(key);
-    }
-  }
 
   return {
     allowed: bucket.count <= limit,
@@ -165,14 +181,19 @@ async function verifyFirebaseToken(idToken) {
 }
 
 function providerConfig() {
+  const safeModel = (value, fallback) => {
+    const model = String(value || '').trim();
+    return model && model.length <= 200 && /^[a-zA-Z0-9._:/-]+$/.test(model) ? model : fallback;
+  };
   return {
-    deepSeekKey: process.env.DEEPSEEK_API_KEY || '',
-    deepSeekModel: process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro',
-    geminiKey: process.env.GEMINI_API_KEY || '',
+    deepSeekKey: String(process.env.DEEPSEEK_API_KEY || '').trim().slice(0, 10_000),
+    deepSeekModel: safeModel(process.env.DEEPSEEK_MODEL, 'deepseek-v4-pro'),
+    geminiKey: String(process.env.GEMINI_API_KEY || '').trim().slice(0, 10_000),
     geminiModels: (process.env.GEMINI_MODELS || 'gemini-3.5-flash,gemini-flash-latest,gemini-2.5-flash')
       .split(',')
-      .map((model) => model.trim())
-      .filter(Boolean),
+      .map((model) => safeModel(model, ''))
+      .filter(Boolean)
+      .slice(0, MAX_PROVIDER_MODELS),
   };
 }
 
