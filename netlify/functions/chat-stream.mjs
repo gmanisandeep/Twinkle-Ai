@@ -1,141 +1,111 @@
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY;
+import shared from './_shared.cjs';
+import providers from './_platform/providers.cjs';
 
-const GEMINI_MODELS = [
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash-lite',
-  'gemini-2.0-flash-lite-001',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-001',
-];
+const {
+  bearerToken,
+  checkRateLimit,
+  originAllowed,
+  providerConfig,
+  providerSignal,
+  requestId,
+  responseHeaders,
+  validateChatRequest,
+  verifyFirebaseToken,
+} = shared;
+const { providerHealth } = providers;
 
-const DEEPSEEK_MODEL = 'deepseek-v4-pro';
-const JSON_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Content-Type': 'application/json; charset=utf-8',
-};
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
 
-function jsonResponse(status, body) {
-  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
-}
-
-async function verifyToken(idToken) {
-  const response = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIREBASE_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idToken }),
-    },
-  );
-  if (!response.ok) return null;
-  const data = await response.json();
-  return data.users?.[0] || null;
+function jsonResponse(status, headers, body, extraHeaders = {}) {
+  return new Response(JSON.stringify(body), { status, headers: { ...headers, ...extraHeaders } });
 }
 
 export function toDeepSeekMessages(messages, systemPrompt) {
   return [
-    { role: 'system', content: systemPrompt || 'You are Twinkle, a helpful AI assistant.' },
-    ...messages
-      .filter((message) => Array.isArray(message.parts) && message.parts.some((part) => part?.text))
-      .slice(-40)
-      .map((message) => ({
-        role: message.role === 'model' ? 'assistant' : 'user',
-        content: message.parts.map((part) => part?.text || '').join('\n').trim(),
-      })),
+    { role: 'system', content: systemPrompt },
+    ...messages.map((message) => ({
+      role: message.role === 'model' ? 'assistant' : 'user',
+      content: message.parts.map((part) => part.text).join('\n'),
+    })),
   ];
 }
 
 function geminiBody(messages, systemPrompt) {
   return {
-    system_instruction: {
-      parts: [{ text: systemPrompt || 'You are Twinkle, a helpful AI assistant.' }],
-    },
+    system_instruction: { parts: [{ text: systemPrompt }] },
     contents: messages,
-    generationConfig: {
-      temperature: 0.85,
-      topP: 0.95,
-      topK: 40,
-      maxOutputTokens: 1500,
-    },
-    safetySettings: [
-      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-    ],
+    generationConfig: { temperature: 0.8, topP: 0.95, maxOutputTokens: 2_048 },
   };
 }
 
-async function openProviderStream(messages, systemPrompt) {
-  const errors = [];
+async function openProviderStream(config, messages, systemPrompt) {
+  const failures = [];
 
-  if (DEEPSEEK_API_KEY) {
+  if (config.deepSeekKey) {
     try {
-      const response = await fetch('https://api.deepseek.com/chat/completions', {
+      const response = await fetch(DEEPSEEK_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+          Authorization: `Bearer ${config.deepSeekKey}`,
         },
         body: JSON.stringify({
-          model: DEEPSEEK_MODEL,
+          model: config.deepSeekModel,
           messages: toDeepSeekMessages(messages, systemPrompt),
+          thinking: { type: 'disabled' },
           stream: true,
           stream_options: { include_usage: true },
-          temperature: 0.85,
-          max_tokens: 1500,
+          temperature: 0.8,
+          max_tokens: 2_048,
         }),
+        signal: providerSignal(),
       });
       if (response.ok && response.body) {
-        return { response, provider: 'deepseek', model: DEEPSEEK_MODEL };
+        return { response, provider: 'deepseek', model: config.deepSeekModel };
       }
-      errors.push(`DeepSeek HTTP ${response.status}`);
+      failures.push(`DeepSeek HTTP ${response.status}`);
       await response.body?.cancel();
     } catch (error) {
-      errors.push(`DeepSeek: ${error.message}`);
+      failures.push(`DeepSeek ${error.name || 'network error'}`);
     }
   }
 
-  for (const model of GEMINI_API_KEY ? GEMINI_MODELS : []) {
+  for (const model of config.geminiKey ? config.geminiModels : []) {
     try {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`,
+        `${GEMINI_BASE_URL}/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(config.geminiKey)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(geminiBody(messages, systemPrompt)),
+          signal: providerSignal(),
         },
       );
       if (response.ok && response.body) return { response, provider: 'google', model };
-      errors.push(`Gemini ${model} HTTP ${response.status}`);
+      failures.push(`Gemini ${model} HTTP ${response.status}`);
       await response.body?.cancel();
       if (![404, 429].includes(response.status)) break;
     } catch (error) {
-      errors.push(`Gemini ${model}: ${error.message}`);
+      failures.push(`Gemini ${model} ${error.name || 'network error'}`);
     }
   }
 
-  throw new Error(errors.join(' | ') || 'No AI provider is configured');
+  throw new Error(failures.join(' | ') || 'No AI provider is configured');
 }
 
 export function extractProviderChunk(provider, payload) {
   if (provider === 'deepseek') {
     return {
       text: payload.choices?.[0]?.delta?.content || '',
-      reasoning: Boolean(payload.choices?.[0]?.delta?.reasoning_content),
+      reasoning: payload.choices?.[0]?.delta?.reasoning_content || '',
       usage: payload.usage || null,
       finishReason: payload.choices?.[0]?.finish_reason || null,
     };
   }
-
   return {
     text: payload.candidates?.[0]?.content?.parts?.map((part) => part?.text || '').join('') || '',
-    reasoning: false,
+    reasoning: '',
     usage: payload.usageMetadata || null,
     finishReason: payload.candidates?.[0]?.finishReason || null,
   };
@@ -145,7 +115,7 @@ function eventBytes(encoder, event, data) {
   return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-function normalizedStream(upstream, provider, model) {
+function normalizedStream(upstream, provider, model, id) {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let upstreamReader = null;
@@ -158,8 +128,9 @@ function normalizedStream(upstream, provider, model) {
       let phase = 'thinking';
       let usage = null;
       let finishReason = null;
+      let outputStarted = false;
 
-      controller.enqueue(eventBytes(encoder, 'meta', { provider, model }));
+      controller.enqueue(eventBytes(encoder, 'meta', { provider, model, requestId: id }));
       controller.enqueue(eventBytes(encoder, 'phase', { phase }));
 
       const consumeEvent = (block) => {
@@ -180,11 +151,11 @@ function normalizedStream(upstream, provider, model) {
         const chunk = extractProviderChunk(provider, payload);
         usage = chunk.usage || usage;
         finishReason = chunk.finishReason || finishReason;
-        if (chunk.reasoning && phase !== 'thinking') {
-          phase = 'thinking';
-          controller.enqueue(eventBytes(encoder, 'phase', { phase }));
+        if (chunk.reasoning) {
+          controller.enqueue(eventBytes(encoder, 'reasoning', { text: chunk.reasoning }));
         }
         if (chunk.text) {
+          outputStarted = true;
           if (phase !== 'responding') {
             phase = 'responding';
             controller.enqueue(eventBytes(encoder, 'phase', { phase }));
@@ -203,12 +174,15 @@ function normalizedStream(upstream, provider, model) {
           if (done) break;
         }
         if (buffer.trim()) consumeEvent(buffer);
-        controller.enqueue(eventBytes(encoder, 'done', { provider, model, usage, finishReason }));
+        controller.enqueue(eventBytes(encoder, 'done', { provider, model, usage, finishReason, requestId: id }));
         controller.close();
       } catch (error) {
-        controller.enqueue(eventBytes(encoder, 'error', { error: 'The AI stream was interrupted. Please try again.' }));
+        console.warn(`[Twinkle:${id}] Provider stream interrupted afterOutput=${outputStarted}: ${error.name}`);
+        controller.enqueue(eventBytes(encoder, 'error', {
+          error: 'The AI stream was interrupted. Please try again.',
+          requestId: id,
+        }));
         controller.close();
-        console.warn('[Twinkle] Provider stream interrupted:', error.message);
       } finally {
         reader.releaseLock();
         upstreamReader = null;
@@ -221,50 +195,73 @@ function normalizedStream(upstream, provider, model) {
 }
 
 export default async (request) => {
-  if (request.method === 'OPTIONS') return new Response('', { status: 200, headers: JSON_HEADERS });
-  if (request.method !== 'POST') return jsonResponse(405, { error: 'Method not allowed' });
-  if (!FIREBASE_API_KEY || (!DEEPSEEK_API_KEY && !GEMINI_API_KEY)) {
-    return jsonResponse(500, { error: 'Server not configured. Contact admin.' });
+  const id = requestId();
+  const origin = request.headers.get('origin') || '';
+  const requestUrl = new URL(request.url);
+  const host = request.headers.get('host') || requestUrl.host;
+  const protocol = requestUrl.protocol.replace(/:$/, '');
+  const headers = responseHeaders(origin, host, id, protocol);
+
+  if (!originAllowed(origin, host, protocol)) return jsonResponse(403, headers, { error: 'Origin not allowed.', requestId: id });
+  if (request.method === 'OPTIONS') return new Response('', { status: 204, headers });
+  if (request.method !== 'POST') return jsonResponse(405, headers, { error: 'Method not allowed.', requestId: id });
+
+  const config = providerConfig();
+  const configuredProviders = providerHealth().filter((provider) => provider.configured);
+  if (!process.env.FIREBASE_API_KEY || !configuredProviders.length) {
+    console.error(`[Twinkle:${id}] Missing Firebase configuration or AI provider key`);
+    return jsonResponse(500, headers, { error: 'Server not configured. Contact admin.', requestId: id });
+  }
+  if (!config.deepSeekKey && !config.geminiKey && configuredProviders.length) {
+    return jsonResponse(501, headers, { error: 'Streaming is unavailable for the configured provider; use the chat fallback.', requestId: id });
   }
 
-  const idToken = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
-  if (!idToken) return jsonResponse(401, { error: 'Authentication required. Please sign in.' });
+  const idToken = bearerToken(request.headers.get('authorization'));
+  if (!idToken) return jsonResponse(401, headers, { error: 'Authentication required. Please sign in.', requestId: id });
 
+  let user;
   try {
-    if (!await verifyToken(idToken)) throw new Error('Invalid token');
+    user = await verifyFirebaseToken(idToken);
+  } catch (error) {
+    console.warn(`[Twinkle:${id}] Firebase verification failed: ${error.name}`);
+  }
+  if (!user?.localId) return jsonResponse(401, headers, { error: 'Session expired. Please sign in again.', requestId: id });
+
+  const rate = checkRateLimit(user.localId);
+  headers['X-RateLimit-Limit'] = String(rate.limit);
+  headers['X-RateLimit-Remaining'] = String(rate.remaining);
+  if (!rate.allowed) {
+    return jsonResponse(429, headers, { error: 'Too many requests. Please wait and try again.', requestId: id }, {
+      'Retry-After': String(rate.retryAfter),
+    });
+  }
+
+  let input;
+  try {
+    input = await request.json();
   } catch {
-    return jsonResponse(401, { error: 'Session expired. Please sign in again.' });
+    return jsonResponse(400, headers, { error: 'Invalid request body.', requestId: id });
   }
-
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse(400, { error: 'Invalid request body.' });
-  }
-
-  const { messages, systemPrompt } = body;
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return jsonResponse(400, { error: 'Missing messages array.' });
-  }
-  if (messages.length > 40 || JSON.stringify(messages).length > 120000) {
-    return jsonResponse(413, { error: 'Conversation is too large. Start a new chat.' });
+  const validated = validateChatRequest(input);
+  if (validated.error) {
+    return jsonResponse(validated.status || 400, headers, { error: validated.error, requestId: id });
   }
 
   try {
-    const opened = await openProviderStream(messages, systemPrompt);
-    return new Response(normalizedStream(opened.response.body, opened.provider, opened.model), {
+    const opened = await openProviderStream(config, validated.messages, validated.systemPrompt);
+    return new Response(normalizedStream(opened.response.body, opened.provider, opened.model, id), {
       headers: {
-        ...JSON_HEADERS,
+        ...headers,
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
         'X-Accel-Buffering': 'no',
       },
     });
   } catch (error) {
-    console.error('[Twinkle] All streaming providers failed:', error.message);
-    return jsonResponse(502, {
-      error: 'AI service is temporarily unavailable. Check the configured provider keys and try again.',
+    console.error(`[Twinkle:${id}] All streaming providers failed: ${error.code || error.name}`);
+    return jsonResponse(502, headers, {
+      error: 'AI service is temporarily unavailable. Please try again shortly.',
+      requestId: id,
     });
   }
 };

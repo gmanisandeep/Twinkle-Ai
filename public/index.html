@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#07080d" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="/assets/brand/twinkle-star.png" />
   <title>Twinkle — Personal AI Operator</title>
   <meta name="description" content="Twinkle is your personal AI operator — think faster, execute better, achieve more." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -11,8 +14,11 @@
   <script src="js/theme.js"></script>
   <link rel="stylesheet" href="css/main.css" />
   <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/safety-privacy.css" />
   <link rel="stylesheet" href="css/v2-foundation.css" />
   <link rel="stylesheet" href="css/v3-shell.css" />
+  <link rel="stylesheet" href="css/landing.css" />
+  <link rel="preload" href="assets/brand/twinkle-star.png" as="image" />
 
   <!-- Firebase Compat SDK (v10) — must load BEFORE auth.js -->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -33,14 +39,42 @@
   <!-- ══════════════════════════════════════════════════════
        LOGIN SCREEN
   ══════════════════════════════════════════════════════════ -->
-  <div id="login-screen" class="login-screen hidden">
+  <div id="login-screen" class="login-screen intro-pending hidden" aria-busy="false">
+    <div class="landing-cosmos" aria-hidden="true">
+      <svg class="constellation-map" viewBox="0 0 900 600" role="presentation">
+        <g class="constellation-lines">
+          <path pathLength="1" d="M86 374 188 206 318 278 450 300 582 196 724 258 820 116" />
+          <path pathLength="1" d="M188 206 246 92 318 278 382 468 450 300 564 424 724 258 806 440" />
+          <path pathLength="1" d="M86 374 246 508 382 468 564 424 806 440" />
+        </g>
+        <g class="constellation-nodes">
+          <circle style="--delay:.12s" cx="86" cy="374" r="3" /><circle style="--delay:.22s" cx="188" cy="206" r="4" />
+          <circle style="--delay:.34s" cx="246" cy="92" r="2.5" /><circle style="--delay:.46s" cx="318" cy="278" r="3" />
+          <circle style="--delay:.58s" cx="382" cy="468" r="3.5" /><circle style="--delay:.72s" cx="450" cy="300" r="5" />
+          <circle style="--delay:.84s" cx="564" cy="424" r="3" /><circle style="--delay:.96s" cx="582" cy="196" r="3.5" />
+          <circle style="--delay:1.08s" cx="724" cy="258" r="4" /><circle style="--delay:1.16s" cx="806" cy="440" r="2.5" />
+          <circle style="--delay:1.24s" cx="820" cy="116" r="3" /><circle style="--delay:1.3s" cx="246" cy="508" r="2.5" />
+        </g>
+      </svg>
+      <img class="landing-focus-star" src="assets/brand/twinkle-star.png" alt="" />
+    </div>
+    <header class="landing-nav">
+      <div class="landing-brand"><img class="twinkle-symbol small" src="assets/brand/twinkle-star.png" alt="" /><span class="twinkle-wordmark">TWINKL<span>E</span></span></div>
+      <button id="skip-intro" class="skip-intro" type="button">Skip animation</button>
+    </header>
+    <section class="landing-story" aria-labelledby="landing-title">
+      <p class="landing-kicker">Your AI. Your universe.</p>
+      <h1 id="landing-title">From intention to <em>action.</em></h1>
+      <p>Twinkle plans, remembers context, works with your approved tools, and verifies the result—so your ideas keep moving.</p>
+      <div class="landing-capabilities" aria-label="Twinkle capabilities"><span>PLAN</span><span>CREATE</span><span>EXECUTE</span><span>VERIFY</span></div>
+    </section>
     <div class="login-card">
       <div class="login-logo">
-        <div class="logo-orb large"></div>
-        <span class="logo-text large">TWINKLE</span>
+        <img class="twinkle-symbol" src="assets/brand/twinkle-star.png" alt="" />
+        <p class="login-eyebrow">Start in one secure step</p>
       </div>
-      <p class="login-tagline">Your personal AI operator</p>
-      <p class="login-sub">Think faster. Execute better. Achieve more.</p>
+      <p class="login-tagline">Create your Twinkle space</p>
+      <p class="login-sub">Continue with Google. Twinkle never receives or stores your Google password.</p>
 
       <button id="google-signin-btn" class="google-signin-btn">
         <!-- Google logo SVG -->
@@ -54,6 +88,7 @@
       </button>
 
       <p id="login-error" class="login-error hidden"></p>
+      <button type="button" class="safety-privacy-link" data-open-safety-privacy>How Twinkle protects your data</button>
       <p class="login-note">Free to use · No credit card · Powered by Google Gemini</p>
     </div>
   </div>
@@ -66,21 +101,20 @@
 
       <!-- Header -->
       <div class="onboarding-header">
-        <div class="logo-orb small"></div>
-        <span>Welcome to Twinkle</span>
+        <img class="twinkle-symbol small" src="assets/brand/twinkle-star.png" alt="" />
+        <span class="onboarding-header-copy"><strong>Make Twinkle yours</strong><span>Three quick choices, then you’re in.</span></span>
       </div>
+      <p class="onboarding-privacy"><button type="button" class="safety-privacy-link" data-open-safety-privacy>How Twinkle protects your data</button></p>
 
       <!-- Progress dots -->
-      <div class="ob-progress">
-        <div class="ob-dot active" id="ob-dot-1"></div>
-        <div class="ob-dot"        id="ob-dot-2"></div>
-        <div class="ob-dot"        id="ob-dot-3"></div>
+      <div class="ob-progress" id="ob-progress" role="progressbar" aria-label="Profile setup" aria-valuemin="1" aria-valuemax="3" aria-valuenow="1">
+        <div class="ob-progress-bar" id="ob-progress-bar"></div>
       </div>
 
       <!-- Step 1: Name -->
       <div class="onboarding-step" id="ob-step-1">
         <h2>What should I call you?</h2>
-        <p>I'll personalise everything for you.</p>
+        <p>We’ve filled this from Google. Change it if you’d like.</p>
         <input type="text" id="ob-name" placeholder="Your first name" maxlength="40" autocomplete="off" />
         <button class="btn-primary" id="ob-next-1">Continue →</button>
       </div>
@@ -88,7 +122,7 @@
       <!-- Step 2: Goal -->
       <div class="onboarding-step hidden" id="ob-step-2">
         <h2>What's your #1 goal right now?</h2>
-        <p>Be specific. I'll keep this in mind.</p>
+        <p>Optional—this helps Twinkle prioritize useful next steps.</p>
         <input type="text" id="ob-goal" placeholder="e.g. Build a profitable agency by 25" maxlength="120" autocomplete="off" />
         <button class="btn-primary" id="ob-next-2">Continue →</button>
       </div>
@@ -96,7 +130,7 @@
       <!-- Step 3: Focus areas -->
       <div class="onboarding-step hidden" id="ob-step-3">
         <h2>What do you focus on?</h2>
-        <p>Select all that apply — I'll activate specialist modes for you.</p>
+        <p>Optional—choose any areas you want ready from day one.</p>
         <div class="domain-select-chips" id="domain-chips">
           <button class="domain-chip" data-domain="coding">💻 Coding</button>
           <button class="domain-chip" data-domain="marketing">📣 Marketing</button>
@@ -229,6 +263,12 @@
               maxlength="4000"
             ></textarea>
             <div class="input-actions">
+              <input id="knowledge-file-input" type="file" hidden accept=".pdf,.docx,.txt,.md,.csv,.tsv,.json,.js,.mjs,.cjs,.ts,.tsx,.jsx,.html,.css,.py,.java,.c,.cpp,.h,.sql,.xml,.yaml,.yml,text/*,image/jpeg,image/png,image/webp,image/gif" />
+              <button class="composer-tool-btn" id="knowledge-upload-btn" type="button" title="Add a file to project knowledge" aria-label="Add a file to project knowledge">+</button>
+              <button class="composer-tool-btn" id="voice-input-btn" type="button" title="Speak to Twinkle" aria-label="Start voice input">Voice</button>
+              <button class="composer-tool-btn" id="voice-output-btn" type="button" aria-pressed="false" title="Speak Twinkle replies" aria-label="Toggle spoken replies">Speak</button>
+              <button class="agent-mode-btn" id="agent-mode-btn" type="button" aria-pressed="false" title="Let Twinkle plan and use approved tools">Agent</button>
+              <button class="agent-mode-btn" id="private-mode-btn" type="button" aria-pressed="false" title="Do not retrieve memory or retain the agent execution">Private</button>
               <span class="char-count" id="char-count">0 / 4000</span>
               <button class="send-btn" id="send-btn" disabled>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -349,8 +389,25 @@
           <button class="btn-secondary small" id="settings-edit-profile">✏️ Edit Profile</button>
         </div>
         <div class="settings-row">
-          <label>Clear all chats &amp; memory</label>
-          <button class="btn-danger small" id="settings-clear-memory">Clear Everything</button>
+          <label>Safety &amp; Privacy</label>
+          <button type="button" class="btn-secondary small" data-open-safety-privacy>Open Safety &amp; Privacy</button>
+          <div class="settings-help">Review how account access, AI requests, saved data, and data controls work.</div>
+        </div>
+        <div class="settings-row">
+          <label for="language-select">Language</label>
+          <select class="theme-select" id="language-select">
+            <option value="en">English</option>
+            <option value="hi">Hindi</option>
+            <option value="te">Telugu</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <label for="model-privacy-select">Model privacy</label>
+          <select class="theme-select" id="model-privacy-select">
+            <option value="cloud">Cloud providers</option>
+            <option value="local">Local Ollama only</option>
+          </select>
+          <div class="settings-help">Local mode fails closed when the self-hosted Ollama gateway is unavailable.</div>
         </div>
         <div class="settings-row">
           <label>Sign out</label>
@@ -454,9 +511,14 @@
   <script src="js/markdown.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/api.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/platform.js"></script>
+  <script src="js/voice.js"></script>
   <script src="js/proactive.js"></script>
   <script src="js/workspace.js"></script>
   <script src="js/command-palette.js"></script>
+  <script src="js/safety-privacy.js"></script>
+  <script src="js/landing.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

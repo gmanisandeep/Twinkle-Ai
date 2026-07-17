@@ -1,266 +1,140 @@
-/* ═══════════════════════════════════════════════════════════
-   TWINKLE v3.0 — NETLIFY SERVERLESS PROXY
-   netlify/functions/chat.js
+const {
+  bearerToken,
+  checkRateLimit,
+  originAllowed,
+  providerConfig,
+  providerSignal,
+  requestId,
+  responseHeaders,
+  validateChatRequest,
+  verifyFirebaseToken,
+} = require('./_shared.cjs');
+const { invokeWithFallback, providerHealth } = require('./_platform/providers.cjs');
 
-   Sits between the browser and configured AI providers.
-   - Verifies Firebase ID token
-   - Uses DeepSeek as primary and Gemini as an optional fallback
-   - Keeps provider credentials on the server
-   - Returns response JSON
-
-   Env vars required (set in Netlify dashboard):
-     DEEPSEEK_API_KEY → your DeepSeek API key
-     GEMINI_API_KEY   → optional Google Gemini fallback key
-     FIREBASE_API_KEY → your Firebase web API key (from firebaseConfig)
-   ═══════════════════════════════════════════════════════════ */
-
-const GEMINI_API_KEY   = process.env.GEMINI_API_KEY;
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY;
-
-const BASE_GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
-const DEEPSEEK_MODEL = 'deepseek-v4-pro';
 
-// Models to try in priority order
-const MODEL_PRIORITY = [
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash-lite',
-  'gemini-2.0-flash-lite-001',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-001',
-];
-
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Content-Type': 'application/json',
-};
-
-/* ── VERIFY FIREBASE TOKEN ─────────────────────────────── */
-async function verifyToken(idToken) {
-  const res = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIREBASE_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idToken }),
-    }
-  );
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.users?.[0] || null;
+function reply(statusCode, headers, body, extraHeaders = {}) {
+  return { statusCode, headers: { ...headers, ...extraHeaders }, body: JSON.stringify(body) };
 }
 
-/* ── CALL GEMINI (non-streaming) ───────────────────────── */
-async function callGemini(model, body) {
-  return fetch(
-    `${BASE_GEMINI_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }
-  );
-}
-
-async function callDeepSeek(messages, systemPrompt) {
-  const convertedMessages = [
-    {
-      role: 'system',
-      content: systemPrompt || 'You are Twinkle, a helpful AI assistant.',
-    },
-    ...messages
-      .filter(message => Array.isArray(message.parts) && message.parts.some(part => part?.text))
-      .slice(-40)
-      .map(message => ({
-        role: message.role === 'model' ? 'assistant' : 'user',
-        content: message.parts.map(part => part?.text || '').join('\n').trim(),
-      })),
+function toDeepSeekMessages(messages, systemPrompt) {
+  return [
+    { role: 'system', content: systemPrompt },
+    ...messages.map((message) => ({
+      role: message.role === 'model' ? 'assistant' : 'user',
+      content: message.parts.map((part) => part.text).join('\n'),
+    })),
   ];
+}
 
+function geminiBody(messages, systemPrompt) {
+  return {
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents: messages,
+    generationConfig: { temperature: 0.8, topP: 0.95, maxOutputTokens: 2_048 },
+  };
+}
+
+async function callDeepSeek(config, messages, systemPrompt) {
   return fetch(DEEPSEEK_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
+      Authorization: `Bearer ${config.deepSeekKey}`,
     },
     body: JSON.stringify({
-      model: DEEPSEEK_MODEL,
-      messages: convertedMessages,
+      model: config.deepSeekModel,
+      messages: toDeepSeekMessages(messages, systemPrompt),
+      thinking: { type: 'disabled' },
       stream: false,
-      temperature: 0.85,
-      max_tokens: 1500,
+      temperature: 0.8,
+      max_tokens: 2_048,
     }),
+    signal: providerSignal(),
   });
 }
 
-/* ── MAIN HANDLER ─────────────────────────────────────── */
+async function callGemini(config, model, messages, systemPrompt) {
+  return fetch(
+    `${GEMINI_BASE_URL}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(config.geminiKey)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(geminiBody(messages, systemPrompt)),
+      signal: providerSignal(),
+    },
+  );
+}
+
 exports.handler = async (event) => {
-  // CORS preflight
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers: CORS, body: '' };
+  const id = requestId();
+  const origin = event.headers?.origin || event.headers?.Origin || '';
+  const host = event.headers?.host || event.headers?.Host || '';
+  let protocol = 'https';
+  try {
+    protocol = new URL(event.rawUrl).protocol.replace(/:$/, '');
+  } catch {
+    protocol = (event.headers?.['x-forwarded-proto'] || event.headers?.['X-Forwarded-Proto'] || protocol)
+      .split(',')[0]
+      .trim();
+  }
+  const headers = responseHeaders(origin, host, id, protocol);
+
+  if (!originAllowed(origin, host, protocol)) return reply(403, headers, { error: 'Origin not allowed.', requestId: id });
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers, body: '' };
+  if (event.httpMethod !== 'POST') return reply(405, headers, { error: 'Method not allowed.', requestId: id });
+
+  const config = providerConfig();
+  if (!process.env.FIREBASE_API_KEY || !providerHealth().some((provider) => provider.configured)) {
+    console.error(`[Twinkle:${id}] Missing Firebase configuration or AI provider key`);
+    return reply(500, headers, { error: 'Server not configured. Contact admin.', requestId: id });
   }
 
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, headers: CORS, body: JSON.stringify({ error: 'Method not allowed' }) };
-  }
-
-  // Check server config
-  if (!FIREBASE_API_KEY || (!DEEPSEEK_API_KEY && !GEMINI_API_KEY)) {
-    console.error('[Twinkle] Missing Firebase configuration or AI provider key');
-    return {
-      statusCode: 500,
-      headers: CORS,
-      body: JSON.stringify({ error: 'Server not configured. Contact admin.' }),
-    };
-  }
-
-  // ── AUTHENTICATE ────────────────────────────────────────
-  const authHeader = event.headers['authorization'] || event.headers['Authorization'] || '';
-  const idToken = authHeader.replace(/^Bearer\s+/i, '').trim();
-
-  if (!idToken) {
-    return { statusCode: 401, headers: CORS, body: JSON.stringify({ error: 'Authentication required. Please sign in.' }) };
-  }
+  const idToken = bearerToken(event.headers?.authorization || event.headers?.Authorization);
+  if (!idToken) return reply(401, headers, { error: 'Authentication required. Please sign in.', requestId: id });
 
   let user;
   try {
-    user = await verifyToken(idToken);
-    if (!user) throw new Error('Token invalid');
-  } catch (e) {
-    return {
-      statusCode: 401,
-      headers: CORS,
-      body: JSON.stringify({ error: 'Session expired. Please sign in again.' }),
-    };
+    user = await verifyFirebaseToken(idToken);
+  } catch (error) {
+    console.warn(`[Twinkle:${id}] Firebase verification failed: ${error.name}`);
+  }
+  if (!user?.localId) return reply(401, headers, { error: 'Session expired. Please sign in again.', requestId: id });
+
+  const rate = checkRateLimit(user.localId);
+  headers['X-RateLimit-Limit'] = String(rate.limit);
+  headers['X-RateLimit-Remaining'] = String(rate.remaining);
+  if (!rate.allowed) {
+    return reply(429, headers, { error: 'Too many requests. Please wait and try again.', requestId: id }, {
+      'Retry-After': String(rate.retryAfter),
+    });
   }
 
-  // ── PARSE REQUEST ────────────────────────────────────────
-  let req;
+  let input;
   try {
-    req = JSON.parse(event.body || '{}');
+    input = JSON.parse(event.body || '{}');
   } catch {
-    return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Invalid request body.' }) };
+    return reply(400, headers, { error: 'Invalid request body.', requestId: id });
   }
+  const validated = validateChatRequest(input);
+  if (validated.error) return reply(validated.status || 400, headers, { error: validated.error, requestId: id });
 
-  const { messages, systemPrompt } = req;
-
-  if (!messages || !Array.isArray(messages) || messages.length === 0) {
-    return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Missing messages array.' }) };
+  const messages = [
+    { role: 'system', content: validated.systemPrompt },
+    ...validated.messages.map((message) => ({ role: message.role === 'model' ? 'assistant' : 'user', content: message.parts.map((part) => part.text).join('\n') })),
+  ];
+  try {
+    const result = await invokeWithFallback(messages, { role: 'general', temperature: 0.8, maxTokens: 2_048 });
+    return reply(200, headers, {
+      text: result.text, provider: result.provider, model: result.model,
+      finishReason: result.finishReason || 'stop', usage: result.usage, costUsd: result.costUsd,
+      attempts: result.attempts, requestId: id,
+    });
+  } catch (error) {
+    console.error(`[Twinkle:${id}] All providers failed: ${error.code || error.name}`);
+    return reply(502, headers, { error: 'AI service is temporarily unavailable. Please try again shortly.', requestId: id });
   }
-
-  if (messages.length > 40 || JSON.stringify(messages).length > 120000) {
-    return { statusCode: 413, headers: CORS, body: JSON.stringify({ error: 'Conversation is too large. Start a new chat.' }) };
-  }
-
-  const providerErrors = [];
-
-  if (DEEPSEEK_API_KEY) {
-    try {
-      const res = await callDeepSeek(messages, systemPrompt);
-      const data = await res.json().catch(() => ({}));
-
-      if (res.ok) {
-        const text = data.choices?.[0]?.message?.content || '';
-        if (text) {
-          return {
-            statusCode: 200,
-            headers: CORS,
-            body: JSON.stringify({
-              text,
-              provider: 'deepseek',
-              model: data.model || DEEPSEEK_MODEL,
-              finishReason: data.choices?.[0]?.finish_reason || 'stop',
-              userId: user.localId,
-              usage: data.usage || null,
-            }),
-          };
-        }
-      }
-
-      providerErrors.push(`DeepSeek HTTP ${res.status}`);
-      console.warn('[Twinkle] DeepSeek request failed:', res.status, data?.error?.message || 'Unknown error');
-    } catch (error) {
-      providerErrors.push('DeepSeek network error');
-      console.warn('[Twinkle] DeepSeek network error:', error.message);
-    }
-  }
-
-  // ── BUILD GEMINI BODY ────────────────────────────────────
-  const geminiBody = {
-    system_instruction: {
-      parts: [{ text: systemPrompt || 'You are Twinkle, a helpful AI assistant.' }],
-    },
-    contents: messages,
-    generationConfig: {
-      temperature: 0.85,
-      topP: 0.95,
-      topK: 40,
-      maxOutputTokens: 1500,
-    },
-    safetySettings: [
-      { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_HATE_SPEECH',        threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',  threshold: 'BLOCK_NONE' },
-      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT',  threshold: 'BLOCK_NONE' },
-    ],
-  };
-
-  // ── TRY MODELS IN PRIORITY ORDER ─────────────────────────
-  for (const model of GEMINI_API_KEY ? MODEL_PRIORITY : []) {
-    let res;
-    try {
-      res = await callGemini(model, geminiBody);
-    } catch (e) {
-      console.warn(`[Twinkle] Network error on ${model}:`, e.message);
-      continue;
-    }
-
-    // Skip rate-limited or unknown models
-    if (res.status === 429 || res.status === 404) continue;
-
-    let data;
-    try {
-      data = await res.json();
-    } catch {
-      continue;
-    }
-
-    if (!res.ok) {
-      const msg = data?.error?.message || `HTTP ${res.status}`;
-      // Quota/rate errors → try next model
-      if (res.status === 429 || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('rate')) {
-        continue;
-      }
-      providerErrors.push(`Gemini ${model}: ${msg}`);
-      console.warn(`[Twinkle] Gemini request failed on ${model}:`, msg);
-      break;
-    }
-
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const finishReason = data.candidates?.[0]?.finishReason || 'STOP';
-
-    return {
-      statusCode: 200,
-      headers: CORS,
-      body: JSON.stringify({
-        text,
-        provider: 'google',
-        model,
-        finishReason,
-        userId: user.localId,
-        usage: data.usageMetadata || null,
-      }),
-    };
-  }
-
-  console.error('[Twinkle] All providers failed:', providerErrors.join(' | '));
-  return {
-    statusCode: 502,
-    headers: CORS,
-    body: JSON.stringify({ error: 'AI service is temporarily unavailable. Check the configured provider keys and try again.' }),
-  };
 };
+
+exports.toDeepSeekMessages = toDeepSeekMessages;
