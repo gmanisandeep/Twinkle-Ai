@@ -9,6 +9,8 @@ const { COLLECTIONS, createStore, newId, safeSegment } = require('./_platform/st
 const { listTools } = require('./_platform/tools.cjs');
 
 const MAX_BODY_BYTES = 4_500_000;
+const PROFILE_ID = 'account';
+const FOCUS_AREAS = new Set(['career', 'learning', 'freelancing', 'business', 'coding', 'content', 'productivity', 'research', 'personal-projects']);
 
 function reply(statusCode, headers, body) {
   return { statusCode, headers, body: JSON.stringify(body) };
@@ -23,6 +25,13 @@ function protocolFor(event) {
 
 function cleanText(value, max) {
   return String(value || '').replace(/\u0000/g, '').trim().slice(0, max);
+}
+
+function safePhotoUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'https:' ? url.toString().slice(0, 2_000) : '';
+  } catch { return ''; }
 }
 
 function planForUser(user) {
@@ -55,6 +64,31 @@ async function dispatch(action, payload, context) {
   if (action === 'providers.health') return { providers: providerHealth() };
   if (action === 'tools.list') return { tools: listTools() };
   if (action === 'usage.get') return { usage: await getUsage(store, context.plan) };
+
+  if (action === 'profile.get') return { profile: await store.get('profiles', PROFILE_ID) };
+  if (action === 'profile.upsert') {
+    const existing = await store.get('profiles', PROFILE_ID);
+    const displayName = cleanText(payload.displayName ?? existing?.displayName ?? context.user?.displayName, 80);
+    const primaryGoal = cleanText(payload.primaryGoal ?? existing?.primaryGoal, 500);
+    const focusAreas = Array.isArray(payload.focusAreas)
+      ? [...new Set(payload.focusAreas.map((item) => cleanText(item, 40)).filter((item) => FOCUS_AREAS.has(item)))].slice(0, 12)
+      : (Array.isArray(existing?.focusAreas) ? existing.focusAreas : []);
+    const onboardingCompleted = existing?.onboardingCompleted === true || payload.onboardingCompleted === true;
+    if (onboardingCompleted && (!displayName || !primaryGoal)) throw new Error('Display name and primary goal are required to finish onboarding.');
+    const now = new Date().toISOString();
+    const profile = await store.put('profiles', PROFILE_ID, {
+      displayName,
+      email: cleanText(context.user?.email || existing?.email, 320),
+      photoURL: safePhotoUrl(context.user?.photoUrl || context.user?.photoURL || existing?.photoURL),
+      focusAreas,
+      primaryGoal,
+      onboardingCompleted,
+      onboardingStep: onboardingCompleted ? 3 : Math.min(3, Math.max(1, Number(payload.onboardingStep) || Number(existing?.onboardingStep) || 1)),
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+    });
+    return { profile };
+  }
 
   if (action === 'memory.list') return { memories: await store.list('memories', 500) };
   if (action === 'memory.search') {
@@ -155,7 +189,7 @@ exports.handler = async (event) => {
   let input;
   try { input = JSON.parse(event.body || '{}'); } catch { return reply(400, headers, { error: 'Invalid request body.', requestId: id }); }
   const action = cleanText(input.action, 100);
-  const context = { userId: user.localId, idToken, plan: planForUser(user), store: createStore({ userId: user.localId, idToken }) };
+  const context = { userId: user.localId, user, idToken, plan: planForUser(user), store: createStore({ userId: user.localId, idToken }) };
   try {
     const result = await dispatch(action, input.payload || {}, context);
     return reply(200, headers, { ok: true, result, requestId: id });

@@ -1,7 +1,7 @@
-const CACHE = 'twinkle-shell-v3';
+const CACHE = 'twinkle-shell-v4';
 const SHELL = [
   '/', '/index.html', '/css/main.css', '/css/components.css', '/css/safety-privacy.css', '/css/v2-foundation.css', '/css/v3-shell.css', '/css/landing.css',
-  '/js/theme.js', '/js/auth.js', '/js/conversations.js', '/js/projects.js', '/js/memory.js', '/js/domains.js',
+  '/js/theme.js', '/js/auth.js', '/js/auth-screen.js', '/js/first-run-router.js', '/js/onboarding.js', '/js/conversations.js', '/js/projects.js', '/js/memory.js', '/js/domains.js',
   '/js/permission.js', '/js/markdown.js', '/js/ui.js', '/js/api.js', '/js/i18n.js', '/js/platform.js', '/js/voice.js',
   '/js/proactive.js', '/js/workspace.js', '/js/command-palette.js', '/js/safety-privacy.js', '/js/landing.js', '/js/app.js',
   '/assets/brand/twinkle-star.png',
