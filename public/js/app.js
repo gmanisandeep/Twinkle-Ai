@@ -11,6 +11,9 @@
   let _activeProjectId = null;
   let _isSending       = false;
   let _activeController = null;
+  let _authRouteKey     = null;
+  let _routeSequence    = 0;
+  let _appInitialized   = false;
 
   /* ── ELEMENTS ───────────────────────────────────────────── */
   const authLoading      = document.getElementById('auth-loading');
@@ -26,6 +29,7 @@
   const permOverlay      = document.getElementById('permission-overlay');
   const projectOverlay   = document.getElementById('project-overlay');
   const phoneOverlay     = document.getElementById('phone-overlay');
+  const profileErrorOverlay = document.getElementById('profile-error-overlay');
 
   /* ══════════════════════════════════════════════════════════
      ENTRY POINT — wait for Firebase auth to resolve
@@ -33,6 +37,20 @@
   function start() {
     SafetyPrivacy.init();
     TwinkleLanding.init();
+    AuthScreen.init();
+    TwinkleOnboarding.init({ complete: () => enterWorkspace({ firstRun: true }) });
+    document.getElementById('profile-retry')?.addEventListener('click', () => {
+      const user = Auth.getCurrentUser?.();
+      if (user) afterSignIn(user, { force: true });
+    });
+    document.getElementById('profile-signout')?.addEventListener('click', () => Auth.signOut());
+    profileErrorOverlay?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Tab') return;
+      const retry = document.getElementById('profile-retry');
+      const signout = document.getElementById('profile-signout');
+      if (event.shiftKey && document.activeElement === retry) { event.preventDefault(); signout.focus(); }
+      else if (!event.shiftKey && document.activeElement === signout) { event.preventDefault(); retry.focus(); }
+    });
     document.addEventListener('twinkle:data-cleared', () => {
       _currentConvId = null;
       _activeProjectId = null;
@@ -41,29 +59,27 @@
     });
     Auth.init();
 
-    Auth.onReady((user) => {
+    Auth.onReady(handleAuthState);
+    Auth.onAuthChange(handleAuthState);
+  }
+
+  function handleAuthState(user) {
+    const key = user?.uid || 'signed-out';
+    if (_authRouteKey === key) return;
+    _authRouteKey = key;
+    if (!user) {
+      _routeSequence += 1;
       authLoading.classList.add('hidden');
-
-      if (!user) {
-        showLoginScreen();
-      } else {
-        afterSignIn(user);
-      }
-    });
-
-    // Listen for ongoing auth changes (sign in / sign out after initial load)
-    Auth.onAuthChange((user) => {
-      if (!user) {
-        // Signed out — reset everything and show login
-        hideAllScreens();
-        showLoginScreen();
-        resetAppState();
-      }
-    });
+      hideAllScreens();
+      resetAppState();
+      showLoginScreen();
+      return;
+    }
+    afterSignIn(user);
   }
 
   function hideAllScreens() {
-    [loginScreen, onboardingOverlay, bootScreen, mainApp].forEach(el => {
+    [loginScreen, onboardingOverlay, bootScreen, mainApp, profileErrorOverlay].forEach(el => {
       el?.classList.add('hidden');
     });
   }
@@ -85,179 +101,49 @@
   function showLoginScreen() {
     TwinkleLanding.show(loginScreen);
     loginScreen.classList.remove('hidden');
-    initLoginScreen();
-  }
-
-  function initLoginScreen() {
-    const btn      = document.getElementById('google-signin-btn');
-    const errorEl  = document.getElementById('login-error');
-
-    if (btn._initialized) return;
-    btn._initialized = true;
-
-    btn.addEventListener('click', async () => {
-      btn.disabled    = true;
-      btn.textContent = 'Signing in…';
-      errorEl.classList.add('hidden');
-
-      try {
-        await Auth.signInWithGoogle();
-        // onReady / onAuthChange will handle the transition
-      } catch (e) {
-        errorEl.textContent = e.code === 'auth/popup-closed-by-user'
-          ? 'Sign-in cancelled.'
-          : `Sign-in failed: ${e.message}`;
-        errorEl.classList.remove('hidden');
-        btn.disabled    = false;
-        btn.innerHTML   = googleBtnHTML();
-      }
-    });
-  }
-
-  function googleBtnHTML() {
-    return `<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-      <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
-      <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/>
-      <path fill="#FBBC05" d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/>
-      <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
-    </svg> Continue with Google`;
   }
 
   /* ══════════════════════════════════════════════════════════
      AFTER SIGN IN — onboarding check → boot
   ══════════════════════════════════════════════════════════ */
-  function afterSignIn(user) {
+  async function afterSignIn(user, { force = false } = {}) {
+    if (force) _authRouteKey = user.uid;
+    const sequence = ++_routeSequence;
     TwinkleLanding.hide();
-    loginScreen.classList.add('hidden');
-
-    if (!Auth.hasOnboarded()) {
-      showOnboarding();
+    hideAllScreens();
+    authLoading.classList.remove('hidden');
+    const route = await FirstRunRouter.resolve({ user, auth: Auth, platform: TwinklePlatform });
+    if (sequence !== _routeSequence || Auth.getCurrentUser?.()?.uid !== user.uid) return;
+    authLoading.classList.add('hidden');
+    if (route.route === 'workspace') {
+      enterWorkspace();
+    } else if (route.route === 'onboarding') {
+      TwinkleOnboarding.show(route.profile);
     } else {
-      runBootSequence();
+      profileErrorOverlay?.classList.remove('hidden');
+      document.getElementById('profile-retry')?.focus();
     }
   }
 
   /* ══════════════════════════════════════════════════════════
      ONBOARDING (3 steps)
   ══════════════════════════════════════════════════════════ */
-  function showOnboarding() {
-    const profile = Auth.getUserProfile();
-
-    // Pre-fill name from Google account
-    const nameInput = document.getElementById('ob-name');
-    if (nameInput && profile?.firstName) nameInput.value = profile.firstName;
-
-    onboardingOverlay.classList.remove('hidden');
-    initOnboarding();
-  }
-
-  function initOnboarding() {
-    if (onboardingOverlay._initialized) return;
-    onboardingOverlay._initialized = true;
-
-    const selectedDomains = new Set();
-    let obName = '';
-    let obGoal = '';
-
-    /* Step 1 → 2 */
-    document.getElementById('ob-next-1').addEventListener('click', () => {
-      const val = document.getElementById('ob-name').value.trim();
-      if (!val) { document.getElementById('ob-name').focus(); return; }
-      obName = val;
-      goToStep(2);
-    });
-    document.getElementById('ob-name').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') document.getElementById('ob-next-1').click();
-    });
-
-    /* Step 2 → 3 */
-    document.getElementById('ob-next-2').addEventListener('click', () => {
-      obGoal = document.getElementById('ob-goal').value.trim() || 'achieve my goals';
-      goToStep(3);
-    });
-    document.getElementById('ob-goal').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') document.getElementById('ob-next-2').click();
-    });
-
-    /* Domain chips */
-    document.querySelectorAll('.domain-chip').forEach(chip => {
-      chip.addEventListener('click', () => {
-        const d = chip.dataset.domain;
-        if (selectedDomains.has(d)) {
-          selectedDomains.delete(d);
-          chip.classList.remove('selected');
-        } else {
-          selectedDomains.add(d);
-          chip.classList.add('selected');
-        }
-      });
-    });
-
-    /* Finish */
-    document.getElementById('ob-finish').addEventListener('click', () => {
-      Auth.savePrefs({
-        name:      obName,
-        goal:      obGoal,
-        domains:   Array.from(selectedDomains),
-        onboarded: true,
-      });
-      onboardingOverlay.classList.add('hidden');
-      runBootSequence();
-    });
-  }
-
-  function goToStep(n) {
-    [1, 2, 3].forEach(i => {
-      document.getElementById(`ob-step-${i}`)?.classList.toggle('hidden', i !== n);
-      document.getElementById(`ob-dot-${i}`)?.classList.toggle('active', i === n);
-    });
-    const progress = document.getElementById('ob-progress');
-    const progressBar = document.getElementById('ob-progress-bar');
-    progress?.setAttribute('aria-valuenow', String(n));
-    if (progressBar) progressBar.style.width = `${(n / 3) * 100}%`;
-  }
-
-  /* ══════════════════════════════════════════════════════════
-     BOOT SEQUENCE
-  ══════════════════════════════════════════════════════════ */
-  function runBootSequence() {
-    bootScreen.classList.remove('hidden');
-
-    const msgEl  = document.getElementById('boot-message');
-    const profile = Auth.getUserProfile();
-    const prefs   = Auth.getPrefs();
-    const name    = prefs.name || profile?.firstName || 'there';
-
-    const lines = [
-      '> Initializing Twinkle v3.0…',
-      '> Loading your conversation history…',
-      '> Connecting to AI backend…',
-      '> Activating domain intelligence…',
-      `> All systems ready. Welcome back, ${name}.`,
-    ];
-
-    let i = 0;
-    const interval = setInterval(() => {
-      if (i < lines.length) {
-        msgEl.textContent += (i > 0 ? '\n' : '') + lines[i++];
-      } else {
-        clearInterval(interval);
-      }
-    }, 340);
-
-    setTimeout(() => setStatus('status-memory', 'ok'),   400);
-    setTimeout(() => setStatus('status-ai',     'ok'),   800);
-    setTimeout(() => setStatus('status-tools',  'warn'), 1200);
-    setTimeout(() => document.getElementById('boot-enter').classList.remove('hidden'), 1900);
-
-    const enterBtn = document.getElementById('boot-enter');
-    const handler = () => {
-      enterBtn.removeEventListener('click', handler);
-      bootScreen.classList.add('hidden');
-      mainApp.classList.remove('hidden');
+  function enterWorkspace({ firstRun = false } = {}) {
+    hideAllScreens();
+    mainApp.classList.remove('hidden');
+    if (firstRun && typeof Workspace !== 'undefined') Workspace.setArrival?.(true);
+    if (!_appInitialized) {
+      _appInitialized = true;
       initApp();
-    };
-    enterBtn.addEventListener('click', handler);
+    } else {
+      updateTopbarUser();
+      renderSidebar();
+      if (typeof Workspace !== 'undefined') Workspace.refresh?.();
+    }
+    if (firstRun) {
+      mainApp.classList.add('twinkle-arrival');
+      setTimeout(() => mainApp.classList.remove('twinkle-arrival'), 900);
+    }
   }
 
   function setStatus(id, state) {
@@ -984,10 +870,15 @@
     });
 
     // Edit profile → re-show onboarding
-    document.getElementById('settings-edit-profile')?.addEventListener('click', () => {
+    document.getElementById('settings-edit-profile')?.addEventListener('click', async () => {
       settingsOverlay.classList.add('hidden');
-      onboardingOverlay._initialized = false; // allow re-init
-      showOnboarding();
+      try {
+        const result = await FirstRunRouter.requestWithTimeout(TwinklePlatform, 'profile.get');
+        mainApp.classList.add('hidden');
+        TwinkleOnboarding.show({ ...(result?.profile || {}), onboardingStep: 1 });
+      } catch {
+        UI.toast('Your profile could not be loaded. Try again.', 'error');
+      }
     });
 
     // Sign out

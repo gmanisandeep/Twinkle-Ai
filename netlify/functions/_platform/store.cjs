@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 
 const COLLECTIONS = new Set([
   'executions', 'files', 'jobs', 'knowledgeChunks', 'knowledgeSources',
-  'memories', 'notes', 'projects', 'tasks', 'usage', 'audit',
+  'memories', 'notes', 'profiles', 'projects', 'tasks', 'usage', 'audit',
 ]);
 const MAX_DOCUMENT_BYTES = 500_000;
 const memoryDatabase = globalThis.__twinkleMemoryDatabase || new Map();

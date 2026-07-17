@@ -8,6 +8,7 @@
   const VALID_VIEWS = new Set(['home', 'chat', 'projects', 'memory', 'tasks', 'files', 'automation']);
   let activeView = 'home';
   let initialized = false;
+  let arrivalGreeting = false;
 
   function escapeHTML(value) {
     if (global?.SafeMarkdown) return global.SafeMarkdown.escapeHTML(value);
@@ -39,6 +40,25 @@
     return 'Good evening';
   }
 
+  function starterActions(focusAreas = []) {
+    const focus = new Set(focusAreas);
+    const actions = [];
+    if (focus.has('career') || focus.has('learning')) actions.push(['Build a learning roadmap', 'Build a practical learning roadmap for my primary goal.']);
+    if (focus.has('business') || focus.has('freelancing')) actions.push(['Create my first plan', 'Turn my primary goal into a clear, realistic first plan.']);
+    if (focus.has('research')) actions.push(['Research an idea', 'Help me research an idea connected to my primary goal.']);
+    if (focus.has('content')) actions.push(['Plan my next piece', 'Create a focused content plan connected to my primary goal.']);
+    if (focus.has('coding') || focus.has('personal-projects')) actions.push(['Start a project', 'Help me define and start a project for my primary goal.']);
+    if (focus.has('productivity')) actions.push(['Plan my next actions', 'Turn my primary goal into the next three useful actions.']);
+    const defaults = [
+      ['Create my first plan', 'Turn my primary goal into a clear, realistic first plan.'],
+      ['Start a project', 'Help me define and start a project for my primary goal.'],
+      ['Research an idea', 'Help me research an idea connected to my primary goal.'],
+      ['Build a learning roadmap', 'Build a practical learning roadmap for my primary goal.'],
+    ];
+    for (const item of defaults) if (!actions.some(([label]) => label === item[0])) actions.push(item);
+    return actions.slice(0, 4);
+  }
+
   function renderHome(data) {
     const name = escapeHTML(data.prefs.name || data.profile.firstName || 'there');
     const goal = escapeHTML(data.prefs.goal || 'Build momentum around what matters most.');
@@ -47,14 +67,21 @@
     const taskCount = (data.memory.tasks || []).filter(task => !task.done).length;
     const recentActivity = (data.memory.log || []).slice(0, 4);
     const latestProjects = data.projects.slice(0, 3);
+    const starters = starterActions(data.prefs.domains || []);
+    const greeting = arrivalGreeting
+      ? `Welcome, ${name}.<br><span>Let’s turn your goal into a plan.</span>`
+      : `${dayGreeting()}, ${name}.<br><span>What should we move forward?</span>`;
 
     return `
       <div class="workspace-ambient" aria-hidden="true"><span></span><span></span></div>
       <div class="workspace-page home-page">
         <header class="workspace-hero">
           <div class="workspace-kicker"><span class="live-dot"></span> Twinkle intelligence</div>
-          <h1>${dayGreeting()}, ${name}.<br><span>What should we move forward?</span></h1>
+          <h1>${greeting}</h1>
           <p>${goal}</p>
+          <div class="starter-actions" aria-label="Suggested first actions">
+            ${starters.map(([label, prompt]) => `<button type="button" data-starter-prompt="${escapeHTML(prompt)}">${escapeHTML(label)}</button>`).join('')}
+          </div>
         </header>
 
         <section class="home-focus-grid" aria-label="Start working">
@@ -218,6 +245,16 @@
   }
 
   function bindSurfaceActions(surface) {
+    surface.querySelectorAll('[data-starter-prompt]').forEach(button => {
+      button.addEventListener('click', () => {
+        setView('chat', { focusComposer: false });
+        const input = global.document.getElementById('chat-input');
+        if (!input) return;
+        input.value = button.dataset.starterPrompt;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+      });
+    });
     surface.querySelectorAll('[data-workspace-target]').forEach(button => {
       button.addEventListener('click', () => setView(button.dataset.workspaceTarget));
     });
@@ -308,7 +345,8 @@
   }
 
   function refresh() { renderActiveView(); }
+  function setArrival(value = true) { arrivalGreeting = Boolean(value); }
   function getActiveView() { return activeView; }
 
-  return { init, setView, refresh, getActiveView, dayGreeting, currentSnapshot };
+  return { init, setView, refresh, setArrival, getActiveView, dayGreeting, currentSnapshot, starterActions };
 });

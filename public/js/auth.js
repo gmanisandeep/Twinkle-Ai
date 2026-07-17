@@ -23,7 +23,10 @@ const Auth = (() => {
   /* ── INIT ──────────────────────────────────────────────── */
   function init() {
     if (!window.firebase) {
-      console.error('[Auth] Firebase compat SDK not loaded');
+      _authReady = true;
+      _readyCallbacks.forEach(cb => cb(null));
+      _readyCallbacks = [];
+      window.dispatchEvent(new CustomEvent('twinkle:auth-error', { detail: { message: 'Google sign-in is temporarily unavailable. Check your connection and retry.' } }));
       return;
     }
 
@@ -32,6 +35,18 @@ const Auth = (() => {
     }
 
     _auth = firebase.auth();
+    _auth.getRedirectResult().catch((error) => {
+      window.dispatchEvent(new CustomEvent('twinkle:auth-error', { detail: { message: authErrorMessage(error) } }));
+    });
+
+    window.setTimeout(() => {
+      if (_authReady) return;
+      _authReady = true;
+      _readyCallbacks.forEach(cb => cb(null));
+      _readyCallbacks = [];
+      _changeCallbacks.forEach(cb => cb(null));
+      window.dispatchEvent(new CustomEvent('twinkle:auth-error', { detail: { message: 'Sign-in is taking longer than expected. Check your connection and retry.' } }));
+    }, 10_000);
 
     _auth.onAuthStateChanged((user) => {
       _currentUser = user;
@@ -63,11 +78,36 @@ const Auth = (() => {
   }
 
   /* ── SIGN IN / OUT ─────────────────────────────────────── */
-  async function signInWithGoogle() {
-    if (!_auth) throw new Error('Auth not initialized');
+  function googleProvider() {
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
-    return _auth.signInWithPopup(provider);
+    return provider;
+  }
+
+  function shouldUseRedirect() {
+    return Boolean(window.matchMedia?.('(max-width: 720px), (pointer: coarse)').matches);
+  }
+
+  function authErrorMessage(error) {
+    const messages = {
+      'auth/popup-closed-by-user': 'Sign-in was cancelled. You can try again when you’re ready.',
+      'auth/cancelled-popup-request': 'Another sign-in window is already open.',
+      'auth/network-request-failed': 'The network is unavailable. Check your connection and try again.',
+      'auth/unauthorized-domain': 'Google sign-in is not configured for this domain.',
+      'auth/operation-not-supported-in-this-environment': 'Google sign-in is unavailable in this browser.',
+    };
+    return messages[error?.code] || 'Google sign-in could not be completed. Please try again.';
+  }
+
+  async function signInWithGoogle({ preferRedirect = shouldUseRedirect() } = {}) {
+    if (!_auth) throw new Error('Auth not initialized');
+    const provider = googleProvider();
+    if (preferRedirect) return _auth.signInWithRedirect(provider);
+    try { return await _auth.signInWithPopup(provider); }
+    catch (error) {
+      if (error?.code === 'auth/popup-blocked') return _auth.signInWithRedirect(provider);
+      throw error;
+    }
   }
 
   async function signOut() {
@@ -128,7 +168,7 @@ const Auth = (() => {
   return {
     init,
     onReady, onAuthChange,
-    signInWithGoogle, signOut,
+    signInWithGoogle, signOut, shouldUseRedirect, authErrorMessage,
     getToken, getCurrentUser, isSignedIn, getUserProfile,
     getPrefs, savePrefs, hasOnboarded,
   };
