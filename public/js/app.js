@@ -31,6 +31,14 @@
      ENTRY POINT — wait for Firebase auth to resolve
   ══════════════════════════════════════════════════════════ */
   function start() {
+    SafetyPrivacy.init();
+    TwinkleLanding.init();
+    document.addEventListener('twinkle:data-cleared', () => {
+      _currentConvId = null;
+      _activeProjectId = null;
+      if (!mainApp.classList.contains('hidden')) loadOrCreateConversation();
+      if (typeof Workspace !== 'undefined') Workspace.refresh();
+    });
     Auth.init();
 
     Auth.onReady((user) => {
@@ -75,6 +83,7 @@
      LOGIN SCREEN
   ══════════════════════════════════════════════════════════ */
   function showLoginScreen() {
+    TwinkleLanding.show(loginScreen);
     loginScreen.classList.remove('hidden');
     initLoginScreen();
   }
@@ -118,6 +127,7 @@
      AFTER SIGN IN — onboarding check → boot
   ══════════════════════════════════════════════════════════ */
   function afterSignIn(user) {
+    TwinkleLanding.hide();
     loginScreen.classList.add('hidden');
 
     if (!Auth.hasOnboarded()) {
@@ -201,6 +211,10 @@
       document.getElementById(`ob-step-${i}`)?.classList.toggle('hidden', i !== n);
       document.getElementById(`ob-dot-${i}`)?.classList.toggle('active', i === n);
     });
+    const progress = document.getElementById('ob-progress');
+    const progressBar = document.getElementById('ob-progress-bar');
+    progress?.setAttribute('aria-valuenow', String(n));
+    if (progressBar) progressBar.style.width = `${(n / 3) * 100}%`;
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -974,40 +988,6 @@
       settingsOverlay.classList.add('hidden');
       onboardingOverlay._initialized = false; // allow re-init
       showOnboarding();
-    });
-
-    document.getElementById('settings-export-data')?.addEventListener('click', async () => {
-      try {
-        await TwinklePlatform.exportAccount();
-        UI.toast('Your Twinkle data export is ready.', 'success');
-      } catch (error) { UI.toast(error.message, 'error'); }
-    });
-
-    document.getElementById('settings-delete-account-data')?.addEventListener('click', async () => {
-      const allowed = await Permission.request('Delete server data', 'This permanently deletes server-side memory, projects, knowledge, jobs, usage records, and execution logs for your account.');
-      if (!allowed) return;
-      try {
-        await TwinklePlatform.request('account.delete');
-        UI.toast('Server-side Twinkle data deleted.', 'success');
-        if (typeof Workspace !== 'undefined') Workspace.refresh();
-      } catch (error) { UI.toast(error.message, 'error'); }
-    });
-
-    // Clear memory
-    document.getElementById('settings-clear-memory')?.addEventListener('click', async () => {
-      const ok = await Permission.request('Clear all data', 'This will delete all chats and projects permanently.');
-      if (ok) {
-        localStorage.removeItem('twinkle_convs_v2');
-        localStorage.removeItem('twinkle_projects_v2');
-        localStorage.removeItem('twinkle_stats_v1');
-        localStorage.removeItem('twinkle_news_cache');
-        API.clearHistory();
-        _currentConvId   = null;
-        _activeProjectId = null;
-        loadOrCreateConversation();
-        UI.toast('All data cleared', 'success');
-        settingsOverlay.classList.add('hidden');
-      }
     });
 
     // Sign out

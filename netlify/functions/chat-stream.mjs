@@ -258,7 +258,7 @@ export default async (request) => {
       },
     });
   } catch (error) {
-    console.error(`[Twinkle:${id}] All streaming providers failed: ${error.message}`);
+    console.error(`[Twinkle:${id}] All streaming providers failed: ${error.code || error.name}`);
     return jsonResponse(502, headers, {
       error: 'AI service is temporarily unavailable. Please try again shortly.',
       requestId: id,

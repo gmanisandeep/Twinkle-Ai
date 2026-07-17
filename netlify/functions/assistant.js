@@ -67,6 +67,7 @@ async function dispatch(action, payload, context) {
     return { memory: await store.put('memories', id, { text: cleanText(payload.text, 8_000), category: cleanText(payload.category || 'context', 40), projectId: cleanText(payload.projectId, 120), pinned: Boolean(payload.pinned), createdAt: payload.createdAt || new Date().toISOString() }) };
   }
   if (action === 'memory.delete') return { deleted: await store.delete('memories', safeSegment(payload.id)) };
+  if (action === 'memory.clear') return { deleted: await store.clear('memories') };
   if (action === 'tasks.list') return { tasks: await store.list('tasks', 500) };
   if (action === 'files.list') return { files: await store.list('files', 500) };
   if (action === 'notes.list') return { notes: await store.list('notes', 500) };
@@ -109,8 +110,24 @@ async function dispatch(action, payload, context) {
   }
   if (action === 'account.delete') {
     let deleted = 0;
-    for (const collection of COLLECTIONS) deleted += await store.clear(collection);
-    return { deleted, completedAt: new Date().toISOString() };
+    const collections = [];
+    for (const collection of COLLECTIONS) {
+      try {
+        const count = await store.clear(collection);
+        deleted += count;
+        collections.push({ collection, status: 'deleted', count });
+      } catch (error) {
+        collections.push({ collection, status: 'failed', count: 0, error: 'Could not delete this data group.' });
+      }
+    }
+    const failures = collections.filter((item) => item.status === 'failed');
+    return {
+      complete: failures.length === 0,
+      deleted,
+      collections,
+      failures: failures.map((item) => item.collection),
+      completedAt: new Date().toISOString(),
+    };
   }
   throw new Error('Unsupported assistant action.');
 }

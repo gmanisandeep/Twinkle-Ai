@@ -174,9 +174,15 @@ class FirestoreStore {
   }
 
   async clear(collection) {
-    const documents = await this.list(collection, 500);
-    await Promise.all(documents.map((document) => this.delete(collection, document.id)));
-    return documents.length;
+    let deleted = 0;
+    for (let page = 0; page < 20; page += 1) {
+      const documents = await this.list(collection, 500);
+      if (!documents.length) break;
+      await Promise.all(documents.map((document) => this.delete(collection, document.id)));
+      deleted += documents.length;
+      if (documents.length < 500) break;
+    }
+    return deleted;
   }
 }
 
